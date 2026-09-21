@@ -29,12 +29,21 @@ integration, memory). This repo is only the *website* half of the pair.
   (Projects & Dev Pipeline), `/agent-console` (Hermes Agent Console),
   `/infrastructure` (Infrastructure & Ops Monitor), `/finance` (Finance &
   Pipeline) — see the updated §12 for details.
-- **This pass is UI-only, wired to realistic mock data**, not real
-  Prisma/API reads — that's a deliberate, explicitly-chosen scope cut to ship
-  a reviewable visual layer fast. A follow-up pass should wire each screen's
-  panels to real data (`ClientPulseClient`, `AgentEvent`/`AgentBusMessage`,
-  `HermesTask`, and new schema for Finance & Infrastructure, which have no
-  backing models yet).
+- **A follow-up session (same day, 2026-09-21) wired real Hermes data into
+  four of the six screens** (`/`, `/agent-console`, `/projects`,
+  `/infrastructure`) and hardened the bridge to support it — see §5 and §12.
+  `/clients` and `/finance` are **still mock** and intentionally so: no Hermes
+  data source exists yet for ad spend/campaigns or structured invoicing;
+  wiring those means building new data pipelines, not connecting existing
+  plumbing. Don't assume "the dashboard is wired to real data" applies
+  uniformly across all six screens.
+- **That same session also fixed a real security issue**: `INTERNAL_API_SECRET`
+  had been hardcoded in two client-side pages (`watchlist-radar`,
+  `x-content`) and shipped in the browser bundle — since `middleware.ts`
+  treats a matching `x-internal-secret` header as a full auth bypass for
+  *any* route, this was a real skeleton key. Fixed and the secret rotated in
+  production. See git log (commit "Fix hardcoded internal-secret leaks...")
+  for the full writeup, not repeated here.
 - The old template's Content OS / growth-tooling routes (`/agents`,
   `/articles`, `/content-os`, `/garden`, `/hermes`, `/ideas`, `/longform`,
   `/memory-wiki`, `/tasks`, `/watchlist-radar`, `/x`, `/x-analytics`,
@@ -65,9 +74,13 @@ integration, memory). This repo is only the *website* half of the pair.
     `/opt/hermyhq/hermes-bridge/.env`.
   - Manage with `systemctl {status,restart} hermyhq-web` /
     `hermyhq-bridge`. Both `Restart=always`.
-- Git remote: `https://github.com/sharbelxyz/hermes-agent-mission-control.git`
-  (the upstream template's repo — this is a clone/fork on the VPS, not
-  necessarily the user's own fork; check before pushing).
+- Git remotes (resolved 2026-09-21 — `origin` used to point at the upstream
+  template author's repo, which was wrong to push to): `origin` →
+  `https://github.com/waqardevi554/hermes-agent-mission-control.git` (the
+  user's own fork — push here), `upstream` →
+  `https://github.com/sharbelxyz/hermes-agent-mission-control.git` (the
+  original template author's repo, kept only for pulling template updates —
+  **never push here**).
 - No `AGENTS.md`/`CLAUDE.md` existed before this file.
 
 ## 4. Tech stack
@@ -90,15 +103,46 @@ Hermy HQ (Next.js, this repo)  <---->  Postgres (shared)  <---->  hermes-bridge 
   requests are `queued`; anything with side effects is `awaiting_approval` and
   sits in the in-app **Approval Inbox** until a human approves it.
 - **Bridge → agent:** the bridge polls Postgres for `queued`/`approved`
-  requests, runs them via the `hermes` CLI, writes results back.
-  **It never auto-runs `awaiting_approval` rows** — this is the safety
-  boundary and must not be bypassed or worked around.
-- **Agent → website:** the bridge mirrors Hermes's kanban board into
-  `HermesTask`, cron/health into `DataStore`, its memory wiki into
-  `HermesMemory`, and activity into `AgentEvent` — all read-only from the
+  requests (every `BRIDGE_POLL_MS`, default 5s), runs them via the `hermes`
+  CLI, writes results back. **It never auto-runs `awaiting_approval` rows** —
+  this is the safety boundary and must not be bypassed or worked around.
+  Failed requests **retry with backoff** (`retryCount`/`maxRetries`/
+  `nextRetryAt` on `AgentRequest`, added 2026-09-21) before landing on a
+  terminal `failed` status — they no longer fail permanently on the first error.
+- **Agent → website (mirror, every `BRIDGE_MIRROR_MS`, default 30s):** the
+  bridge mirrors Hermes's kanban board into `HermesTask`; cron jobs into
+  **both** a raw-text `DataStore["hermes-crons"]` blob (fallback) and
+  structured `HermesCronJob` rows (added 2026-09-21, preferred by
+  `/api/hermes/crons`); session metadata into `HermesSession` (added
+  2026-09-21); health into `DataStore`; its memory wiki into `HermesMemory`;
+  and — best-effort, noise-filtered — Hermes's real activity (via
+  `hermes logs`) into `AgentEvent` with `source="hermes"` (distinct from the
+  bridge's own `source="bridge"` events). All of this is read-only from the
   website's side.
 - Nothing on the Hermes/bridge side is exposed to the internet; only outbound
   access to Postgres + the local `hermes` CLI is needed.
+- **Kanban is meant to become the real task-tracking system going forward**
+  (per the user, 2026-09-21) — `/projects` maps Hermes's kanban status values
+  onto its 4 visual columns via the same heuristic as the orphaned
+  `/hermes` page's `TaskBoard` (don't invent a new mapping if you touch this).
+
+### Hermes's *own* web dashboard — separate system, worth knowing about
+
+`/root/.hermes` also runs its own FastAPI dashboard (`hermes-dashboard.service`,
+port 9119, bound `0.0.0.0` — publicly reachable, not just this repo's problem
+to fix). As of 2026-09-21 it's fronted by Caddy at
+**`https://hermes.tasheerdigital.com`** (see `/etc/caddy/Caddyfile` — added
+alongside the existing `agents.tasheerdigital.com` and
+`hermes-mcp.tasheerdigital.com` blocks) so it has real HTTPS. Login supports
+**both** the original username/password provider and (added 2026-09-21)
+**Google OIDC** — config lives in `/root/.hermes/.env`
+(`HERMES_DASHBOARD_OIDC_*`, `HERMES_DASHBOARD_PUBLIC_URL`) and
+`/root/.hermes/config.yaml` (`dashboard.trusted_proxies: ["127.0.0.1"]`, for
+Caddy). Both login methods are deliberately kept enabled (no lockout risk).
+This dashboard/auth setup is **entirely separate from this repo** — nothing
+about it lives in `/opt/hermyhq`, nothing to commit here, but it's the same
+Hermes install this repo's bridge talks to, so it's relevant context if you're
+doing further Hermes-integration work.
 
 ## 6. Data model (`prisma/schema.prisma`)
 
@@ -106,7 +150,7 @@ Roughly four families of models:
 
 1. **Auth** — `Account`, `Session`, `User`, `VerificationToken` (standard NextAuth/Prisma adapter tables)
 2. **Content OS / creative tooling** — `Draft`, `TweetMetric`, `Idea`, `ContentCalendar`, `YoutubeIdea`, `YoutubeScript`, `YoutubeFeedback`, `LongformScript`, `Article`, `SavedTitle`, `ContentRequest`, `BattleRoyaleBot`
-3. **Hermes bus** — `AgentState`, `AgentBusMessage`, `AgentRequest`, `AgentEvent`, `HermesTask`, `HermesMemory`, `DataStore`, `Brief`, `Mission` (this is the message-bus plumbing described in §5 — treat carefully, it's load-bearing infra, not a feature to redesign casually)
+3. **Hermes bus** — `AgentRequest`, `AgentEvent`, `HermesTask`, `HermesMemory`, `HermesCronJob`, `HermesSession`, `DataStore`, `Brief`, `Mission` (this is the message-bus plumbing described in §5 — treat carefully, it's load-bearing infra, not a feature to redesign casually). `HermesCronJob`/`HermesSession` and `AgentRequest.retryCount`/`maxRetries`/`nextRetryAt` and `AgentEvent.source` were added 2026-09-21. **`Brief` and `Mission` are dead/unused** — the bridge writes briefings into `DataStore["hermes-briefing"]` instead, and nothing writes `Mission` at all; don't assume either is populated. `AgentState`/`AgentBusMessage` are a **separate, fictional, decorative multi-persona system** (Max/Sage/Knox/Nova/Pixel) that calls OpenRouter directly with hardcoded prompts — **zero connection to the real Hermes agent**, easy to confuse with the real bus given the naming, don't build real-data features against it.
 4. **Client Pulse** — `ClientPulseClient`, `ClientPulseChat`, `ClientPulseMessage`, `ClientPulseAnalysis`, `ClientPulseAlert` (see §8 — this is the module most directly relevant to an agency rebuild, and it's currently an empty shell)
 
 ## 7. Tasheer Digital — brand & business context
@@ -216,8 +260,16 @@ Google sign-in is further restricted to emails in `ALLOWED_EMAILS`
 - **Live IA** (linked in `src/components/sidebar.tsx`), one directory per
   route: `page.tsx` (Overview), `clients`, `projects`, `agent-console`,
   `infrastructure`, `finance`. Each composes `ConsoleTopBar` +
-  `src/components/ui/kit.tsx` primitives, with mock data arrays shaped like
-  the real Prisma models they'll eventually read from (see §2).
+  `src/components/ui/kit.tsx` primitives.
+- **Real data (as of 2026-09-21)**: `/` (autonomous-action count, activity
+  stream, kanban milestones), `/agent-console` (dispatch, approvals, activity
+  log — composed from the pre-existing `ApprovalInbox`/`HermesDispatches`
+  components rather than reimplemented), `/projects` (real kanban board via
+  `/api/hermes/tasks`), `/infrastructure` (added a real Hermes-health
+  `StatCard`, VPS/Docker cards stay mock — unrelated to Hermes). **Still mock,
+  deliberately**: `/clients`, `/finance` (no Hermes data source exists for
+  ad spend/campaigns or structured invoicing — see §2), and the Agent
+  Console's autonomy-mode toggle (no real Hermes-side runtime equivalent).
 - **Unlinked legacy routes** (code untouched, not in nav, not maintained):
   `agents`, `articles`, `client-pulse`, `content-os`, `garden`, `hermes`,
   `ideas`, `longform`, `memory-wiki`, `tasks`, `watchlist-radar`, `x`,
@@ -286,3 +338,27 @@ After any change meant to go live: `npm run build` in `/opt/hermyhq`, then
   `hermes-bridge/node_modules/` + `hermes-bridge/package-lock.json`. These
   predate this work — don't assume you caused them, don't clean them up
   without checking with the user first.
+- **When wiring a screen to real data, check for an existing component
+  first.** `ApprovalInbox`/`HermesDispatches`/`HermesRuns` (in
+  `src/components/`) were already fully working, already polling the real
+  `/api/hermes/*` routes, and already themed correctly (they build on
+  `ui/kit.tsx`, which inherits the current design tokens automatically) —
+  they'd just been orphaned from nav by the UI rebuild. Reusing them into
+  `/agent-console` was far less work and risk than reimplementing their logic
+  against the new visual shell. Check `src/components/` before writing new
+  data-fetching logic for something that sounds like it might already exist.
+- **A hardcoded secret in a `"use client"` component ships to the browser.**
+  That's not a theoretical risk — it's how the `INTERNAL_API_SECRET` leak in
+  §2 happened, and per `middleware.ts` that header bypasses auth for every
+  route, not just the endpoint the leaking code happened to call. Grep for
+  hardcoded-looking header/token values before trusting that "it's just for
+  one endpoint" reasoning.
+- **Verify CLI/log-based data sources empirically before building a parser
+  against them.** The plan to mirror Hermes's real activity via
+  `hermes logs --component tools` looked reasonable on paper (the flag
+  exists, is documented for this) but returned nothing useful in practice —
+  every CLI invocation reloads ~50 plugins and floods the log with init
+  noise before any real signal, and the component tags didn't isolate it.
+  Triggering one real request and inspecting the actual output before
+  finalizing the design (see `mirrorActivity()` in `hermes-bridge/bridge.mjs`)
+  caught this; guessing from documentation alone would not have.
