@@ -21,24 +21,35 @@ integration, memory). This repo is only the *website* half of the pair.
 
 ## 2. Current project status (important — read before building)
 
-- The app is running **exactly as cloned from the upstream template** — still
-  branded "Hermy HQ", generic blue accent, Geist fonts, no client data.
-- On 2026-09-20 an agent did a quick brand re-skin (gold accent, Montserrat/
-  Inter fonts, "Tasheer HQ" text, seeded a Sintco Dental row) to explore
-  customization. **This was fully rolled back same-day** at the user's
-  request — see git history / this file — because the actual plan is a
-  **complete custom UI rebuild**, using this repo only as the underlying
-  foundation (Next.js/Prisma/bridge architecture, auth, message-bus plumbing),
-  not as a skin to reskin.
-- **Design system decision is OPEN and unresolved.** An agent asked the user
-  whether the rebuild should be light-mode (matching Tasheer's actual brand
-  system used in invoices/landing pages — see §7) or dark-mode (dashboard
-  convention, adapting Tasheer's gold/black into a dark UI), and what the
-  design-system phase should produce (tokens+primitives only, vs tokens +
-  a visual `/style-guide` review page). The user did not pick an option and
-  the conversation paused. **Do not assume an answer — ask, or check with the
-  user, before committing to a theme direction.**
-- No custom screens have been built yet. This is still pre-rebuild.
+- **The UI rebuild happened on 2026-09-21 and is live in the repo.** The user
+  designed 6 screens in Google Stitch (project "Hermes Mission Control
+  Dashboard") and an agent implemented them. **This resolved the design-system
+  decision below in favor of light mode** — do not reopen that question.
+- Current IA: `/` (Overview), `/clients` (Client & Campaign Hub), `/projects`
+  (Projects & Dev Pipeline), `/agent-console` (Hermes Agent Console),
+  `/infrastructure` (Infrastructure & Ops Monitor), `/finance` (Finance &
+  Pipeline) — see the updated §12 for details.
+- **This pass is UI-only, wired to realistic mock data**, not real
+  Prisma/API reads — that's a deliberate, explicitly-chosen scope cut to ship
+  a reviewable visual layer fast. A follow-up pass should wire each screen's
+  panels to real data (`ClientPulseClient`, `AgentEvent`/`AgentBusMessage`,
+  `HermesTask`, and new schema for Finance & Infrastructure, which have no
+  backing models yet).
+- The old template's Content OS / growth-tooling routes (`/agents`,
+  `/articles`, `/content-os`, `/garden`, `/hermes`, `/ideas`, `/longform`,
+  `/memory-wiki`, `/tasks`, `/watchlist-radar`, `/x`, `/x-analytics`,
+  `/x-content`, `/youtube`) were **removed from the nav but their code was
+  left untouched** — reachable by direct URL only, not maintained, and now
+  visually inconsistent (dark-theme CSS assumptions) since the shared design
+  tokens flipped to light. This was a deliberate, reversible choice — don't
+  delete them without checking with the user, and don't "fix" their styling
+  as drive-by work.
+- ~~Design system decision is OPEN and unresolved~~ — **resolved**: light
+  mode, black primary, gold accent (`#f5b84b`), Montserrat + Inter, per the
+  Stitch `DESIGN.md` now reflected 1:1 in `src/app/globals.css`'s `:root`
+  token block. (§7's brand-token file was the input Stitch's design was
+  built from — the CSS variables are now the single source of truth for the
+  live app, not that file directly.)
 
 ## 3. Directory location & services
 
@@ -200,27 +211,43 @@ bypass auth with header `x-internal-secret` matching `INTERNAL_API_SECRET`.
 Google sign-in is further restricted to emails in `ALLOWED_EMAILS`
 (`src/lib/auth.ts`).
 
-## 12. UI structure & conventions (as inherited from the template — subject to the open rebuild decision in §2)
+## 12. UI structure & conventions (current, post-rebuild — 2026-09-21)
 
-- `src/app/` — one directory per route: `agents`, `api`, `articles`,
-  `client-pulse`, `content-os`, `garden`, `hermes`, `ideas`, `login`,
-  `longform`, `memory-wiki`, `tasks`, `watchlist-radar`, `x`, `x-analytics`,
-  `x-content`, `youtube`.
-- `src/components/ui/kit.tsx` — the shared primitive kit ("Calm Luxury
-  primitive kit" — Panel, SectionHeader, Eyebrow, Skeleton, EmptyState, Pill,
-  count-up hooks, etc.). Every page is meant to build from this, not
-  reinvent primitives per-page.
-- `src/app/globals.css` — design tokens under a `:root` block labeled
-  "PREMIUM DESIGN SYSTEM · Hermy HQ · Calm Luxury (Linear × Stripe)":
-  monochrome dark surface ladder, hairline borders, tabular numerals, **one**
-  desaturated accent color, semantic-only status colors (`--up`/`--down`/`--warn`).
-  This is the structural system referred to in §2 as "the foundation" — the
-  open question is whether to keep this structure and re-skin its values, or
-  replace it with something derived fresh from Tasheer's light-mode system.
-- `src/components/sidebar.tsx`, `src/app/login/page.tsx`,
-  `src/components/OfficeView.tsx` are the three places generic "Hermy HQ"
-  branding text/letter-badges currently render in-app (confirmed as of
-  2026-09-20 — grep for "Hermy HQ" to re-check if this file is stale).
+- **Live IA** (linked in `src/components/sidebar.tsx`), one directory per
+  route: `page.tsx` (Overview), `clients`, `projects`, `agent-console`,
+  `infrastructure`, `finance`. Each composes `ConsoleTopBar` +
+  `src/components/ui/kit.tsx` primitives, with mock data arrays shaped like
+  the real Prisma models they'll eventually read from (see §2).
+- **Unlinked legacy routes** (code untouched, not in nav, not maintained):
+  `agents`, `articles`, `client-pulse`, `content-os`, `garden`, `hermes`,
+  `ideas`, `longform`, `memory-wiki`, `tasks`, `watchlist-radar`, `x`,
+  `x-analytics`, `x-content`, `youtube`. These predate the rebuild and now
+  render inconsistently against the light token set — expected, not a bug.
+- `src/components/ui/kit.tsx` — the shared primitive kit (renamed from "Calm
+  Luxury" to the operator kit). Exports `Panel`, `SectionHeader`, `Eyebrow`,
+  `Skeleton`, `EmptyState`, `Pill`, `Button` (variants: `primary`/`accent`/
+  `ghost`), `StatCard`, `AlertBanner`, `ActivityLogPanel`, count-up hooks.
+  Every console screen builds from this, not bespoke per-page markup.
+- `src/components/console-topbar.tsx` — the shared top bar (breadcrumb +
+  global search + system-health pills + actions slot), mounted per-page via
+  `<ConsoleTopBar section="..." actions={...} />`, not in the app shell.
+- `src/app/globals.css` — design tokens under `:root`, now sourced 1:1 from
+  the Stitch "Hermes Mission Control" `DESIGN.md`: light surface ladder
+  (`--bg`/`--surface-1/2/3`), black `--primary`, gold `--accent`
+  (`#f5b84b`), semantic `--up`/`--down`/`--warn`. Same variable names as
+  before the rebuild (so legacy pages still render, just with light values
+  now) — see §2 for the "why."
+- Fonts: Montserrat (headlines, via the `.headline` utility class /
+  `--font-headline`) + Inter (body/UI, default `--font-sans`), both via
+  `next/font/google` in `src/app/layout.tsx`. Geist was fully retired.
+- `recharts` (previously an installed-but-unused dependency) is now used for
+  the console screens' charts (mini trend lines, CPU/RAM graphs, deploy
+  velocity bar chart) — the legacy hand-rolled `Sparkline`/`donut-chart`/
+  `HLPnlChart` components are untouched and still used by unlinked pages.
+- Branding ("Hermes Mission Control" / Tasheer Digital, gold-on-black "H"
+  mark) lives in `src/components/sidebar.tsx`, `src/app/login/page.tsx`, and
+  `src/app/layout.tsx` metadata. `src/components/OfficeView.tsx` (only used
+  by the unlinked `/agents` route) still says "Hermy HQ" — left as-is.
 - `src/app/favicon.ico` + (if present) `src/app/icon.png` — Next.js App
   Router auto-serves these as the site favicon; no manual `<link>` needed.
 

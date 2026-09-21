@@ -50,14 +50,15 @@
 }
 
 :root {
-  --background: #0a0b0d;
-  --foreground: #e7e8ea;
+  --background: #f8f9fa;
+  --foreground: #191c1d;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-headline: var(--font-montserrat), var(--font-sans);
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
@@ -66,7 +67,7 @@
 }
 
 html {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 body {
@@ -76,33 +77,6 @@ body {
   font-feature-settings: "cv01", "ss03", "calt", "kern";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-
-/* ── Glass morphism (legacy compat) ────────────────────── */
-.glass {
-  background: #171717;
-  border: 1px solid #262626;
-  transition: all 0.2s ease;
-}
-
-.glass:hover {
-  border-color: #333;
-}
-
-.glass-card {
-  background: #171717;
-  border: 1px solid #262626;
-  transition: all 0.2s ease;
-}
-
-.glass-card:hover {
-  border-color: #333;
-}
-
-/* ── War Room grid shift ─────────────────────────────────── */
-@keyframes grid-shift {
-  0%   { transform: translate(0, 0); }
-  100% { transform: translate(50px, 50px); }
 }
 
 /* ── Page transitions ────────────────────────────────────── */
@@ -121,13 +95,6 @@ body {
   to   { background-position:  200% 0; }
 }
 
-.skeleton {
-  background: linear-gradient(90deg, #1a1a1a 25%, #242424 50%, #1a1a1a 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
-  border-radius: 6px;
-}
-
 /* ── Custom scrollbar ────────────────────────────────────── */
 ::-webkit-scrollbar {
   width: 6px;
@@ -139,17 +106,17 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.08);
+  background: rgba(0, 0, 0, 0.12);
   border-radius: 99px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255,255,255,0.14);
+  background: rgba(0, 0, 0, 0.2);
 }
 
 /* Selection */
 ::selection {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(245, 184, 75, 0.35);
 }
 
 /* Force LTR everywhere */
@@ -163,45 +130,51 @@ textarea, input {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   PREMIUM DESIGN SYSTEM  ·  Hermy HQ  ·  "Calm Luxury" (Linear × Stripe)
-   Restraint + space. Monochrome surface ladder, hairline borders,
-   tabular/mono numerals, ONE desaturated accent, semantic-only
-   status color, sub-300ms ease-out motion. Elevation by light,
-   never by shadow (overlays are the only exception).
+   HERMES MISSION CONTROL  ·  Tasheer Digital operator design system
+   Light, dense, operator-grade (Linear × Retool). Pure black anchors
+   authority, golden-orange is the one signal/telemetry accent, cool
+   neutral surfaces layered by hairline borders (not shadow). Tokens
+   sourced 1:1 from the Stitch "Hermes Mission Control" DESIGN.md.
    ═══════════════════════════════════════════════════════════ */
 :root {
-  /* surface ladder — depth via lighter tiers, not shadows */
-  --bg:        #0a0b0d;   /* near-black, never #000 (avoids halation) */
-  --surface-1: #101113;   /* cards */
-  --surface-2: #16181b;   /* raised / hover */
-  --surface-3: #1e2024;   /* modals, highest tier */
+  /* surface ladder — depth via layered tint, not shadows */
+  --bg:        #f8f9fa;   /* base canvas */
+  --surface-1: #ffffff;   /* cards / data grids */
+  --surface-2: #f3f4f5;   /* raised / hover */
+  --surface-3: #edeeef;   /* modals, highest tier */
 
   /* hairlines carry structure */
-  --line:        rgba(255, 255, 255, 0.08);
-  --line-strong: rgba(255, 255, 255, 0.13);
+  --line:        #cfc4c5;   /* border-subtle */
+  --line-strong: #7e7576;   /* border-strong */
 
-  /* text ramp (contrast-checked against surfaces) */
-  --text:   #e7e8ea;   /* primary  ~15:1 */
-  --text-2: #a0a3a8;   /* secondary ~7:1 */
-  --text-3: #6b6e74;   /* tertiary — labels/decorative */
-  --text-4: #4b4e54;   /* ghost — hairline captions */
+  /* text ramp */
+  --text:   #191c1d;   /* on-surface, primary */
+  --text-2: #4c4546;   /* on-surface-variant, secondary */
+  --text-3: #6b6465;   /* tertiary — labels/decorative */
+  --text-4: #8c8384;   /* ghost — hairline captions */
 
-  /* ONE brand accent (desaturated for dark) + semantic-only status */
-  --accent: #6ea8fe;
-  --up:     #5fd0a0;
-  --down:   #f28b82;
-  --warn:   #f5c451;
+  /* brand + semantic status */
+  --primary:   #000000;
+  --secondary: #7e5700;
+  --accent:    #f5b84b;   /* signal telemetry gold */
+  --accent-2:  #fcbf51;   /* accent hover/container */
+  --up:        #1a7f37;   /* success / positive delta */
+  --up-container: #dcf5e5;
+  --down:      #ba1a1a;   /* error / negative delta */
+  --down-container: #ffdad6;
+  --warn:      #7e5700;   /* pending / attention (gold family) */
+  --warn-container: #ffdeac;
 
-  /* radius — calm & precise, never toy-soft */
-  --r-sm: 8px;
-  --r-md: 12px;
-  --r-lg: 16px;
+  /* radius */
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 8px;
 
   /* motion */
   --ease:       cubic-bezier(0.16, 1, 0.3, 1);   /* strong ease-out */
   --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
 
-  /* legacy aliases — keep older components rendering during migration */
+  /* legacy aliases — keep older (unlinked) components rendering, not maintained */
   --hq-bg: var(--bg);
   --hq-text: var(--text);
   --hq-text-dim: var(--text-2);
@@ -212,8 +185,8 @@ textarea, input {
   --hq-up: var(--up);
   --hq-down: var(--down);
   --hq-warn: var(--warn);
-  --hq-elev-1: rgba(255, 255, 255, 0.02);
-  --hq-elev-2: rgba(255, 255, 255, 0.04);
+  --hq-elev-1: rgba(0, 0, 0, 0.02);
+  --hq-elev-2: rgba(0, 0, 0, 0.04);
 }
 
 /* tabular/mono numerals — everywhere numbers compare or align */
@@ -233,98 +206,71 @@ textarea, input {
   color: var(--text-3);
 }
 
-/* Ambient backdrop — a living "place": a slow-drifting aurora under a
-   very faint grid. Pinned to the viewport so it never cuts off on scroll. */
-@keyframes aurora-drift {
-  0%   { transform: translate3d(-6%, -4%, 0) scale(1.05); }
-  50%  { transform: translate3d(6%, 3%, 0) scale(1.16); }
-  100% { transform: translate3d(-6%, -4%, 0) scale(1.05); }
-}
-.hq-ambient {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  overflow: hidden;
-  background: var(--bg);
-}
-.hq-ambient::before {
-  content: "";
-  position: absolute;
-  inset: -20%;
-  background:
-    radial-gradient(72% 62% at 8% 6%, rgba(110, 168, 254, 0.14), transparent 70%),
-    radial-gradient(64% 62% at 92% 22%, rgba(95, 208, 160, 0.09), transparent 72%),
-    radial-gradient(70% 62% at 44% 80%, rgba(110, 168, 254, 0.07), transparent 74%),
-    radial-gradient(62% 60% at 98% 98%, rgba(95, 208, 160, 0.06), transparent 74%);
-  filter: blur(48px);
-  animation: aurora-drift 44s ease-in-out infinite;
-  will-change: transform;
-}
-.hq-ambient::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(to right, rgba(255, 255, 255, 0.012) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
-  background-size: 60px 60px;
-  /* fade top→bottom uniformly across the full width — no horizontal seam */
-  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent 80%);
-  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent 80%);
+/* Headline type — Montserrat, tight tracking, structural authority */
+.headline {
+  font-family: var(--font-headline);
+  letter-spacing: -0.01em;
 }
 
-/* Card material — calm luxury: surface-1 + hairline + faint inner
-   top light. No glow, no drop shadow on data cards. */
+/* Card material — operator-grade: surface-1 + crisp hairline border.
+   Flat by default; interactive cards get a border-color shift, not a
+   dimensional lift (per DESIGN.md "Interactive Feedback"). */
 .panel {
   position: relative;
   border-radius: var(--r-lg);
   background: var(--surface-1);
   border: 1px solid var(--line);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
   transition:
-    border-color 0.3s var(--ease),
-    background 0.3s var(--ease),
-    transform 0.25s var(--ease),
-    box-shadow 0.3s var(--ease);
+    border-color 0.2s var(--ease),
+    background 0.2s var(--ease),
+    box-shadow 0.2s var(--ease);
 }
 .panel-interactive { cursor: pointer; }
 .panel-interactive:hover {
   border-color: var(--line-strong);
   background: var(--surface-2);
-  transform: translateY(-2px);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 32px -14px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 4px 12px rgba(25, 28, 29, 0.08);
 }
 .panel-interactive:active {
-  transform: translateY(-1px) scale(0.995);
+  transform: scale(0.997);
 }
 
-/* overlays (menus / modals) — the ONLY place a real shadow lives */
+/* overlays (menus / modals) — compact, high-precision shadow */
 .elevated {
-  background: var(--surface-2);
+  background: var(--surface-1);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-md);
-  box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.12);
 }
 
-/* buttons — one filled primary in the whole system, rest are ghost */
+/* buttons — black primary, gold accent, ghost/outline secondary */
 .btn-primary {
-  background: var(--text);
-  color: #0a0b0d;
+  background: var(--primary);
+  color: #ffffff;
   font-weight: 600;
-  border-radius: 9999px;
-  transition: opacity 0.12s var(--ease), transform 0.12s var(--ease);
+  border-radius: var(--r-sm);
+  transition: background 0.12s var(--ease), transform 0.12s var(--ease);
 }
-.btn-primary:hover { opacity: 0.92; }
+.btn-primary:hover { background: #1b1b1b; }
 .btn-primary:active { transform: scale(0.97); }
 
+.btn-accent {
+  background: var(--accent);
+  color: var(--primary);
+  font-weight: 600;
+  border-radius: var(--r-sm);
+  transition: background 0.12s var(--ease), transform 0.12s var(--ease);
+}
+.btn-accent:hover { background: var(--accent-2); }
+.btn-accent:active { transform: scale(0.97); }
+
 .btn-ghost {
-  color: var(--text-2);
+  color: var(--text);
   border: 1px solid var(--line);
-  border-radius: 9999px;
+  border-radius: var(--r-sm);
   transition: color 0.15s var(--ease), border-color 0.15s var(--ease), background 0.15s var(--ease), transform 0.12s var(--ease);
 }
-.btn-ghost:hover { color: var(--text); border-color: var(--line-strong); background: var(--surface-2); }
+.btn-ghost:hover { border-color: var(--primary); background: var(--surface-2); }
 .btn-ghost:active { transform: scale(0.97); }
 
 /* designed focus ring (not the UA default) */
@@ -360,9 +306,8 @@ textarea, input {
 
 @media (prefers-reduced-motion: reduce) {
   .hq-rise { animation: none; opacity: 1; }
-  .hq-ambient::before { animation: none; }
-  .panel-interactive:hover { transform: none; }
   .panel-interactive:active,
   .btn-primary:active,
+  .btn-accent:active,
   .btn-ghost:active { transform: none; }
 }

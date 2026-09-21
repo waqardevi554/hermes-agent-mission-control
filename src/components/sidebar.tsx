@@ -2,79 +2,68 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { useState, useEffect } from "react";
 import {
-  Home,
-  Twitter,
-  Play,
+  Gauge,
+  Users,
+  FolderKanban,
   Bot,
-  Lightbulb,
-  Flower2,
-  FileText,
-  ClipboardList,
-  HeartPulse,
-  Cpu,
-  BookOpen,
-  Workflow,
+  Server,
+  Landmark,
   Menu,
   X,
+  Search,
 } from "lucide-react";
 
-const navGroups = [
-  {
-    name: "Overview",
-    items: [
-      { href: "/", label: "Dashboard", icon: Home },
-      { href: "/hermes", label: "Hermes", icon: Cpu },
-      { href: "/tasks", label: "Tasks", icon: ClipboardList },
-    ],
-  },
-  {
-    name: "Content",
-    items: [
-      { href: "/x", label: "X", icon: Twitter },
-      { href: "/content-os", label: "Pipeline", icon: Workflow },
-      { href: "/articles", label: "Articles", icon: FileText },
-      { href: "/youtube", label: "YouTube", icon: Play },
-    ],
-  },
-  {
-    name: "Data",
-    items: [
-      { href: "/client-pulse", label: "Client Pulse", icon: HeartPulse },
-    ],
-  },
-  {
-    name: "System",
-    items: [
-      { href: "/agents", label: "Agents", icon: Bot },
-      { href: "/memory-wiki", label: "Memory Wiki", icon: BookOpen },
-      { href: "/ideas", label: "Ideas", icon: Lightbulb },
-      { href: "/garden", label: "Garden", icon: Flower2 },
-    ],
-  },
+const navItems = [
+  { href: "/", label: "Overview", icon: Gauge },
+  { href: "/clients", label: "Clients & Campaigns", icon: Users },
+  { href: "/projects", label: "Projects & Dev", icon: FolderKanban },
+  { href: "/agent-console", label: "Agent Console", icon: Bot },
+  { href: "/infrastructure", label: "Infrastructure", icon: Server },
+  { href: "/finance", label: "Finance & Pipeline", icon: Landmark },
 ];
 
-// Mobile tab bar - only show the 5 most important
-const mobileTabsRaw = [
-  { href: "/", label: "Dashboard", icon: Home },
-  { href: "/x", label: "X", icon: Twitter },
-  { href: "/youtube", label: "YouTube", icon: Play },
-  { href: "/ideas", label: "Ideas", icon: Lightbulb },
-  { href: "/agents", label: "Agents", icon: Bot },
-];
+// Mobile bottom tab bar — 5 most-used of the 6 (Finance stays in the drawer)
+const mobileTabs = navItems.filter((i) => i.href !== "/finance");
+
+function Logo() {
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="w-8 h-8 rounded-[var(--r-sm)] bg-[var(--primary)] flex items-center justify-center">
+        <span className="text-[var(--accent)] font-bold text-[13px] tracking-tight headline">H</span>
+      </div>
+      <div className="min-w-0 leading-tight">
+        <div className="font-semibold text-[var(--text)] tracking-[-0.01em] text-[14px] truncate headline">
+          Hermes Mission Control
+        </div>
+        <div className="eyebrow !text-[9px] !tracking-[0.12em] truncate">Tasheer Digital OPS</div>
+      </div>
+    </div>
+  );
+}
+
+function openCommandPalette() {
+  window.dispatchEvent(new CustomEvent("hq:open-palette"));
+}
+
+function initials(name?: string | null) {
+  if (!name) return "TD";
+  const parts = name.trim().split(/\s+/);
+  return (parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "");
+}
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { data: session } = useSession();
   const [isOpen, setIsOpen] = useState(false);
 
-  // Close sidebar on route change (mobile)
   useEffect(() => {
     const frame = requestAnimationFrame(() => setIsOpen(false));
     return () => cancelAnimationFrame(frame);
   }, [pathname]);
 
-  // Close sidebar when resizing to desktop
   useEffect(() => {
     const handleResize = () => {
       if (window.innerWidth >= 768) setIsOpen(false);
@@ -83,23 +72,17 @@ export function Sidebar() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  const Logo = () => (
-    <div className="flex items-center gap-2.5">
-      <div className="w-8 h-8 rounded-[10px] bg-[var(--text)] flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.4)]">
-        <span className="text-[#0a0b0d] font-bold text-[13px] tracking-tight">H</span>
-      </div>
-      <span className="font-semibold text-[var(--text)] tracking-[-0.01em] text-[15px]">Hermy HQ</span>
-    </div>
-  );
+  const userName = session?.user?.name ?? "Waqar Younis Bhatti";
+  const userRole = "OWNER · SOLO OPS";
 
   return (
     <>
       {/* Mobile header */}
-      <div className="md:hidden fixed top-0 left-0 right-0 z-50 bg-[var(--bg)]/90 backdrop-blur-xl border-b border-[var(--line)] px-4 py-3 flex items-center justify-between">
+      <div className="md:hidden fixed top-0 left-0 right-0 z-50 bg-[var(--bg)]/95 backdrop-blur-xl border-b border-[var(--line)] px-4 py-3 flex items-center justify-between">
         <Logo />
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="p-2 text-[var(--text-2)] hover:text-[var(--text)] transition-colors rounded-lg hover:bg-[var(--surface-1)]"
+          className="p-2 text-[var(--text-2)] hover:text-[var(--text)] transition-colors rounded-[var(--r-sm)] hover:bg-[var(--surface-2)]"
           aria-label="Toggle menu"
         >
           {isOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
@@ -107,23 +90,23 @@ export function Sidebar() {
       </div>
 
       {/* Mobile bottom tab bar */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-[var(--bg)]/90 backdrop-blur-xl border-t border-[var(--line)] px-2 py-2 safe-area-pb">
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-[var(--bg)]/95 backdrop-blur-xl border-t border-[var(--line)] px-2 py-2 safe-area-pb">
         <nav className="flex justify-around">
-          {mobileTabsRaw.map((item) => {
+          {mobileTabs.map((item) => {
             const isActive = pathname === item.href;
             const Icon = item.icon;
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex flex-col items-center gap-1 p-2 px-3 rounded-lg transition-all ${
+                className={`flex flex-col items-center gap-1 p-2 px-3 rounded-[var(--r-sm)] transition-all ${
                   isActive
                     ? "text-[var(--text)] bg-[var(--surface-2)]"
                     : "text-[var(--text-3)] hover:text-[var(--text-2)] active:scale-95"
                 }`}
               >
                 <Icon className="w-5 h-5" />
-                <span className="text-[10px] font-medium">{item.label}</span>
+                <span className="text-[10px] font-medium">{item.label.split(" ")[0]}</span>
               </Link>
             );
           })}
@@ -133,7 +116,7 @@ export function Sidebar() {
       {/* Mobile overlay */}
       {isOpen && (
         <div
-          className="md:hidden fixed inset-0 bg-black/60 z-40"
+          className="md:hidden fixed inset-0 bg-black/40 z-40"
           onClick={() => setIsOpen(false)}
         />
       )}
@@ -142,8 +125,8 @@ export function Sidebar() {
       <aside
         className={`
           fixed md:relative z-50 md:z-10
-          w-64 md:w-[15rem] h-full
-          bg-[var(--bg)] md:bg-transparent border-r border-[var(--line)]
+          w-64 md:w-[15.5rem] h-full
+          bg-[var(--bg)] border-r border-[var(--line)]
           flex flex-col
           transition-transform duration-300 ease-in-out
           ${isOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
@@ -151,80 +134,81 @@ export function Sidebar() {
         `}
       >
         {/* Logo */}
-        <div className="hidden md:block px-5 pt-6 pb-8">
+        <div className="hidden md:block px-5 pt-6 pb-6">
           <Logo />
         </div>
 
         {/* Spacer for mobile header */}
         <div className="h-16 md:hidden" />
 
+        {/* Search */}
+        <div className="hidden md:block px-3 mb-5">
+          <button
+            onClick={openCommandPalette}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-[var(--r-sm)] border border-[var(--line)] bg-[var(--surface-1)] text-left text-[var(--text-3)] hover:border-[var(--line-strong)] transition-colors"
+          >
+            <Search className="w-3.5 h-3.5 shrink-0" />
+            <span className="text-[12.5px] flex-1 truncate">Search clients, commits, agents…</span>
+            <kbd className="text-[10px] num rounded px-1.5 py-0.5 bg-[var(--surface-2)] border border-[var(--line)]">
+              ⌘K
+            </kbd>
+          </button>
+        </div>
+
         {/* Nav */}
         <nav className="flex-1 px-3 overflow-y-auto">
-          <div className="space-y-5">
-            {navGroups.map((group) => (
-              <div key={group.name}>
-                <h3 className="eyebrow px-3 mb-1.5 !text-[10px] !text-[var(--text-4)]">
-                  {group.name}
-                </h3>
-                <div className="space-y-0.5">
-                  {group.items.map((item) => {
-                    const isActive =
-                      pathname === item.href || pathname.startsWith(item.href + "/");
-                    const Icon = item.icon;
-                    return (
-                      <div key={item.href}>
-                        <Link
-                          href={item.href}
-                          className={`group relative flex items-center gap-3 px-3 py-[7px] rounded-[10px] transition-all duration-150 ${
-                            isActive
-                              ? "bg-[var(--surface-2)] text-[var(--text)]"
-                              : "text-[var(--text-2)] hover:text-[var(--text)] hover:bg-[var(--surface-1)]"
-                          }`}
-                        >
-                          {isActive && (
-                            <span className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-[2px] rounded-full bg-[var(--accent)]" />
-                          )}
-                          <Icon
-                            className={`w-[17px] h-[17px] shrink-0 ${
-                              isActive ? "text-[var(--text)]" : "text-[var(--text-3)] group-hover:text-[var(--text-2)]"
-                            }`}
-                          />
-                          <span className="text-[13.5px] font-medium">{item.label}</span>
-                        </Link>
-                        {"anchors" in group &&
-                          isActive &&
-                          (group as { anchors?: { href: string; label: string }[] }).anchors && (
-                            <div className="ml-[26px] mt-0.5 space-y-0.5 border-l border-[var(--line)] pl-3">
-                              {(group as { anchors: { href: string; label: string }[] }).anchors.map(
-                                (a) => (
-                                  <a
-                                    key={a.href}
-                                    href={a.href}
-                                    className="block text-[12px] text-[var(--text-3)] hover:text-[var(--text-2)] py-1 transition-colors"
-                                  >
-                                    {a.label}
-                                  </a>
-                                )
-                              )}
-                            </div>
-                          )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
+          <h3 className="eyebrow px-3 mb-1.5">Operations Console</h3>
+          <div className="space-y-0.5">
+            {navItems.map((item) => {
+              const isActive =
+                pathname === item.href || pathname.startsWith(item.href + "/");
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`group relative flex items-center gap-3 px-3 py-[7px] rounded-[var(--r-sm)] transition-all duration-150 ${
+                    isActive
+                      ? "bg-[var(--surface-2)] text-[var(--text)]"
+                      : "text-[var(--text-2)] hover:text-[var(--text)] hover:bg-[var(--surface-1)]"
+                  }`}
+                >
+                  {isActive && (
+                    <span className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-[2px] rounded-full bg-[var(--accent)]" />
+                  )}
+                  <Icon
+                    className={`w-[17px] h-[17px] shrink-0 ${
+                      isActive ? "text-[var(--text)]" : "text-[var(--text-3)] group-hover:text-[var(--text-2)]"
+                    }`}
+                  />
+                  <span className="text-[13.5px] font-medium truncate">{item.label}</span>
+                </Link>
+              );
+            })}
           </div>
         </nav>
 
         {/* Footer */}
-        <div className="px-4 py-4 border-t border-[var(--line)]">
+        <div className="px-4 py-3 border-t border-[var(--line)] space-y-2.5">
+          <div className="flex items-center gap-2 text-[var(--text-3)] text-[11px] num">
+            <Server className="w-3 h-3 shrink-0" />
+            <span className="truncate">PROD-01 · Hetzner Nuremberg</span>
+          </div>
           <div className="flex items-center gap-2 text-[var(--text-3)] text-[11.5px]">
             <span className="relative flex w-1.5 h-1.5">
               <span className="absolute inline-flex h-full w-full rounded-full bg-[var(--up)] opacity-60 animate-ping" />
               <span className="relative inline-flex w-1.5 h-1.5 rounded-full bg-[var(--up)]" />
             </span>
-            <span>All systems online</span>
+            <span>Hermes Agent Active</span>
+          </div>
+          <div className="flex items-center gap-2 pt-1.5 border-t border-[var(--line)] mt-1">
+            <div className="w-7 h-7 rounded-full bg-[var(--primary)] text-[var(--accent)] flex items-center justify-center text-[11px] font-bold shrink-0 headline">
+              {initials(userName).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <div className="text-[12.5px] font-medium text-[var(--text)] truncate">{userName}</div>
+              <div className="eyebrow !text-[9px] truncate">{userRole}</div>
+            </div>
           </div>
         </div>
       </aside>

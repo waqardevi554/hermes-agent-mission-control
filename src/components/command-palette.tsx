@@ -1,23 +1,19 @@
 "use client";
 
 /* ───────────────────────────────────────────────────────────
-   Hermy HQ · Command Palette (⌘K / Ctrl-K)
+   Hermes Mission Control · Command Palette (⌘K / Ctrl-K)
    Globally mounted. Fuzzy nav + dispatch-to-Hermes fallback.
-   Calm Luxury tokens, no external deps beyond lucide-react.
    ─────────────────────────────────────────────────────────── */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  LayoutDashboard,
-  Twitter,
-  FileText,
-  Youtube,
-  Activity,
+  Gauge,
+  Users,
+  FolderKanban,
   Bot,
-  Lightbulb,
-  Sprout,
-  ListChecks,
+  Server,
+  Landmark,
   Sparkles,
   CornerDownLeft,
   Search,
@@ -32,16 +28,12 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { label: "Dashboard", href: "/", icon: LayoutDashboard },
-  { label: "X", href: "/x", icon: Twitter },
-  { label: "Articles", href: "/articles", icon: FileText },
-  { label: "YouTube", href: "/youtube", icon: Youtube },
-  { label: "Client Pulse", href: "/client-pulse", icon: Activity },
-  { label: "Agents", href: "/agents", icon: Bot },
-  { label: "Ideas", href: "/ideas", icon: Lightbulb },
-  { label: "Garden", href: "/garden", icon: Sprout },
-  { label: "Tasks", href: "/tasks", icon: ListChecks },
-  { label: "Hermes", href: "/hermes", icon: Sparkles },
+  { label: "Overview", href: "/", icon: Gauge },
+  { label: "Clients & Campaigns", href: "/clients", icon: Users },
+  { label: "Projects & Dev", href: "/projects", icon: FolderKanban },
+  { label: "Agent Console", href: "/agent-console", icon: Bot },
+  { label: "Infrastructure", href: "/infrastructure", icon: Server },
+  { label: "Finance & Pipeline", href: "/finance", icon: Landmark },
 ];
 
 type Row =
@@ -57,7 +49,7 @@ export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // ── global open/close hotkey ──────────────────────────────
+  // ── global open/close hotkey + programmatic open (sidebar/topbar search) ──
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
@@ -65,8 +57,13 @@ export function CommandPalette() {
         setOpen((o) => !o);
       }
     };
+    const onOpenEvent = () => setOpen(true);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("hq:open-palette", onOpenEvent);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("hq:open-palette", onOpenEvent);
+    };
   }, []);
 
   // ── reset + focus when opening ────────────────────────────
@@ -141,7 +138,7 @@ export function CommandPalette() {
       // watch it run in the Dispatches panel.
       setDispatched(true);
       await runDispatch(row.query);
-      setTimeout(() => { setOpen(false); router.push("/hermes"); }, 650);
+      setTimeout(() => { setOpen(false); router.push("/agent-console"); }, 650);
     },
     [close, router, runDispatch],
   );
