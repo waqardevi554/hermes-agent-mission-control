@@ -2,15 +2,21 @@
 /**
  * Hermy HQ ↔ Hermes bridge.
  *
- * Runs on the Mac mini where Hermes lives. Talks to the shared Postgres
- * (the same DATABASE_URL the website uses) — nothing is exposed to the
- * internet. Two jobs:
+ * Runs colocated with Hermes. Talks to the shared Postgres (the same
+ * DATABASE_URL the website uses) — nothing is exposed to the internet. Two jobs:
  *
- *   PULL  (Hermes → website): mirror the kanban board into HermesTask,
- *         cron list + health into DataStore, and emit activity events.
+ *   PULL  (Hermes → website): mirror the kanban board into HermesTask;
+ *         cron jobs into both raw DataStore text (fallback) and structured
+ *         HermesCronJob rows; session metadata into HermesSession; health
+ *         into DataStore; and best-effort real activity (via `hermes logs`,
+ *         noise-filtered — see mirrorActivity()) into AgentEvent
+ *         (source="hermes", distinct from this bridge's own source="bridge"
+ *         events).
  *   PUSH  (website → Hermes): pick up AgentRequest rows that are `queued`
  *         (safe) or `approved` (human-approved side-effecting), run them
- *         through the `hermes` CLI, and write results back.
+ *         through the `hermes` CLI, and write results back. Failures retry
+ *         with backoff (retryCount/maxRetries/nextRetryAt) before landing
+ *         on a terminal `failed` status.
  *
  * Requires: the `hermes` binary on PATH, and env DATABASE_URL.
  * Optional env: HERMES_BOARD (default "default"), BRIDGE_POLL_MS (5000),
@@ -59,11 +65,11 @@ async function hermes(args, { timeout = 30000 } = {}) {
   return stdout;
 }
 
-async function emit(kind, title, { detail = null, agent = "hermes", level = "info", meta = null } = {}) {
+async function emit(kind, title, { detail = null, agent = "hermes", level = "info", meta = null, source = "bridge" } = {}) {
   await q(
-    `INSERT INTO "AgentEvent" (id, kind, title, detail, agent, level, meta, "createdAt")
-     VALUES ($1,$2,$3,$4,$5,$6,$7, now())`,
-    [randomUUID(), kind, title.slice(0, 200), detail, agent, level, meta ? JSON.stringify(meta) : null]
+    `INSERT INTO "AgentEvent" (id, kind, title, detail, agent, level, source, meta, "createdAt")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())`,
+    [randomUUID(), kind, title.slice(0, 200), detail, agent, level, source, meta ? JSON.stringify(meta) : null]
   );
 }
 
@@ -110,11 +116,144 @@ async function mirrorKanban() {
 }
 
 async function mirrorCrons() {
+  let out;
   try {
-    const out = await hermes(["cron", "list", "--all"], { timeout: 15000 });
-    const lines = out.split("\n").map((l) => l.trimEnd()).filter(Boolean);
-    await setStore("hermes-crons", { jobs: lines, raw: out.slice(0, 8000), syncedAt: new Date().toISOString() });
-  } catch (e) { log("cron list failed:", e.message.split("\n")[0]); }
+    out = await hermes(["cron", "list", "--all"], { timeout: 15000 });
+  } catch (e) { log("cron list failed:", e.message.split("\n")[0]); return; }
+
+  // Keep the raw-text mirror as-is — /api/hermes/crons falls back to this if the
+  // structured parse below comes up empty (e.g. CLI output format drifts again).
+  const lines = out.split("\n").map((l) => l.trimEnd()).filter(Boolean);
+  await setStore("hermes-crons", { jobs: lines, raw: out.slice(0, 8000), syncedAt: new Date().toISOString() });
+
+  // Structured parse: each job is a "<id> [status]" header line followed by
+  // indented "Key:   Value" lines until the next header or EOF.
+  const jobs = [];
+  let cur = null;
+  const headerRe = /^\s*([a-f0-9]{8,})\s+\[(\w+)\]/;
+  const fieldRe = /^\s{2,}([A-Za-z ]+):\s*(.*)$/;
+  for (const line of out.split("\n")) {
+    const h = line.match(headerRe);
+    if (h) {
+      if (cur) jobs.push(cur);
+      cur = { id: h[1], active: h[2] === "active", fields: {} };
+      continue;
+    }
+    if (!cur) continue;
+    const f = line.match(fieldRe);
+    if (f) cur.fields[f[1].trim()] = f[2].trim();
+  }
+  if (cur) jobs.push(cur);
+  if (!jobs.length) return; // nothing parsed — leave HermesCronJob table as last-known-good
+
+  const seen = new Set();
+  for (const j of jobs) {
+    seen.add(j.id);
+    const nextRunAt = j.fields["Next run"] ? new Date(j.fields["Next run"]) : null;
+    // "Last run" is formatted like "2026-09-21T08:00:12.356659+02:00  ok" — split the trailing status word off.
+    const lastRunRaw = j.fields["Last run"] || null;
+    const lastRunMatch = lastRunRaw ? lastRunRaw.match(/^(\S+)\s*(.*)$/) : null;
+    const lastRunAt = lastRunMatch && !isNaN(new Date(lastRunMatch[1]).getTime()) ? new Date(lastRunMatch[1]) : null;
+    const lastRunStatus = lastRunMatch ? (lastRunMatch[2] || null) : null;
+    const skills = (j.fields["Skills"] || "").split(",").map((s) => s.trim()).filter(Boolean);
+    await q(
+      `INSERT INTO "HermesCronJob" (id, name, schedule, active, "nextRunAt", "lastRunAt", "lastRunStatus", "deliverTargets", skills, "monitorScript", "updatedAt", "syncedAt")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now(), now())
+       ON CONFLICT (id) DO UPDATE SET
+         name=EXCLUDED.name, schedule=EXCLUDED.schedule, active=EXCLUDED.active,
+         "nextRunAt"=EXCLUDED."nextRunAt", "lastRunAt"=EXCLUDED."lastRunAt", "lastRunStatus"=EXCLUDED."lastRunStatus",
+         "deliverTargets"=EXCLUDED."deliverTargets", skills=EXCLUDED.skills, "monitorScript"=EXCLUDED."monitorScript",
+         "updatedAt"=now(), "syncedAt"=now()`,
+      [j.id, j.fields["Name"] || j.id, j.fields["Schedule"] || "", j.active,
+       nextRunAt && !isNaN(nextRunAt.getTime()) ? nextRunAt : null, lastRunAt, lastRunStatus,
+       j.fields["Deliver"] || null, skills, j.fields["Monitor"] || null]
+    );
+  }
+  await q(`DELETE FROM "HermesCronJob" WHERE id <> ALL($1::text[])`, [[...seen]]);
+}
+
+/* ─────────────── Sessions (metadata mirror) ─────────────── */
+async function mirrorSessions() {
+  let out;
+  try {
+    out = await hermes(["sessions", "list", "--limit", "50"], { timeout: 15000 });
+  } catch (e) { log("sessions list failed:", e.message.split("\n")[0]); return; }
+
+  const lines = out.split("\n").filter((l) => l.trim() && !/^[─-]{5,}$/.test(l.trim()));
+  const dataLines = lines.filter((l) => !l.trim().startsWith("Title"));
+
+  const parseAgo = (s) => {
+    const m = s.match(/^(\d+)([mhd])\s+ago$/i);
+    if (!m) return null;
+    const n = Number(m[1]);
+    const ms = m[2] === "m" ? 60_000 : m[2] === "h" ? 3_600_000 : 86_400_000;
+    return new Date(Date.now() - n * ms);
+  };
+
+  const seen = new Set();
+  for (const line of dataLines) {
+    const parts = line.trim().split(/\s{2,}/);
+    if (parts.length < 3) continue;
+    const id = parts[parts.length - 1];
+    if (!id) continue;
+    seen.add(id);
+    const lastActiveAt = parts.length >= 3 ? parseAgo(parts[parts.length - 2]) : null;
+    const source = parts.length >= 4 ? parts[parts.length - 3] : null;
+    const title = parts.slice(0, parts.length - (parts.length >= 4 ? 3 : 2)).join(" ") || id;
+    await q(
+      `INSERT INTO "HermesSession" (id, title, source, "lastActiveAt", "syncedAt")
+       VALUES ($1,$2,$3,$4, now())
+       ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title, source=EXCLUDED.source,
+         "lastActiveAt"=EXCLUDED."lastActiveAt", "syncedAt"=now()`,
+      [id, title, source, lastActiveAt]
+    );
+  }
+  if (seen.size) await q(`DELETE FROM "HermesSession" WHERE id <> ALL($1::text[])`, [[...seen]]);
+}
+
+/* ─────────────── Real activity mirror (best-effort — see note) ─────────────── */
+// `hermes logs --component tools/agent` returned nothing useful in testing: every
+// CLI invocation re-registers ~50 plugins and floods agent.log with init noise
+// before any real work happens, and the component tags didn't isolate actual
+// tool-call/reasoning lines for this invocation pattern (`hermes -z ...`, a fresh
+// process per call). Rather than build a fragile scraper chasing an internal log
+// format, this is a deliberately modest noise filter: known boilerplate patterns
+// are dropped, anything else (including all WARNING/ERROR lines) is kept. This
+// will surface real signal when there is any, but should not be trusted as a
+// complete picture of Hermes's internal activity — flagged as a known limitation.
+const LOG_NOISE_RE = /registered .* provider:|capability_check |Plugin discovery complete|memory trim: reason=|dashboard-auth[:-]|HTTP Request: .* "HTTP\/1\.1 200 OK"$/;
+const LOG_LINE_RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s+(\w+)\s+([\w.]+):\s*(.*)$/;
+
+async function mirrorActivity() {
+  let out;
+  try {
+    out = await hermes(["logs", "--since", "10m", "-n", "500"], { timeout: 15000 });
+  } catch (e) { log("logs fetch failed:", e.message.split("\n")[0]); return; }
+
+  const { rows } = await q(`SELECT data FROM "DataStore" WHERE key='hermes-activity-cursor'`);
+  const cursor = rows[0]?.data?.lastTimestamp ? new Date(rows[0].data.lastTimestamp) : new Date(0);
+  let maxTs = cursor;
+  const toEmit = [];
+
+  for (const line of out.split("\n")) {
+    const m = line.match(LOG_LINE_RE);
+    if (!m) continue;
+    const [, tsStr, level, logger, message] = m;
+    const ts = new Date(tsStr.replace(" ", "T"));
+    if (isNaN(ts.getTime()) || ts <= cursor) continue;
+    if (ts > maxTs) maxTs = ts;
+    const isNoise = LOG_NOISE_RE.test(line);
+    if (isNoise && level === "INFO") continue; // always keep WARNING/ERROR regardless of pattern
+    toEmit.push({ ts, level, logger, message });
+  }
+
+  for (const r of toEmit.slice(-50)) { // cap per tick so a big backlog can't flood the feed
+    const lvl = r.level === "ERROR" ? "down" : r.level === "WARNING" ? "warn" : "info";
+    await emit("activity", r.message.slice(0, 200), { detail: r.logger, level: lvl, source: "hermes" });
+  }
+  if (toEmit.length || maxTs > cursor) {
+    await setStore("hermes-activity-cursor", { lastTimestamp: maxTs.toISOString() });
+  }
 }
 
 async function mirrorCost() {
@@ -276,15 +415,30 @@ async function runRequest(r) {
     await emit("run", `Done: ${r.title}`, { level: "up", detail: result.slice(0, 400), meta: { requestId: r.id } });
   } catch (e) {
     const msg = (e.stderr || e.message || "error").toString().split("\n")[0].slice(0, 600);
-    await q(`UPDATE "AgentRequest" SET status='failed', error=$2, "finishedAt"=now(), "updatedAt"=now() WHERE id=$1`, [r.id, msg]);
-    await emit("run", `Failed: ${r.title}`, { level: "down", detail: msg, meta: { requestId: r.id } });
-    log("request failed:", r.id, msg);
+    const retryCount = (r.retryCount || 0) + 1;
+    const maxRetries = r.maxRetries ?? 3;
+    if (retryCount <= maxRetries) {
+      const backoffMs = [30_000, 120_000, 600_000][retryCount - 1] || 600_000;
+      const nextRetryAt = new Date(Date.now() + backoffMs);
+      await q(
+        `UPDATE "AgentRequest" SET status='queued', "retryCount"=$2, "nextRetryAt"=$3, error=$4, "updatedAt"=now() WHERE id=$1`,
+        [r.id, retryCount, nextRetryAt, msg]
+      );
+      await emit("run", `Retry ${retryCount}/${maxRetries}: ${r.title}`, { level: "warn", detail: msg, meta: { requestId: r.id } });
+      log("request retry scheduled:", r.id, `${retryCount}/${maxRetries}`, msg);
+    } else {
+      await q(`UPDATE "AgentRequest" SET status='failed', error=$2, "finishedAt"=now(), "updatedAt"=now() WHERE id=$1`, [r.id, msg]);
+      await emit("run", `Failed: ${r.title}`, { level: "down", detail: msg, meta: { requestId: r.id } });
+      log("request failed:", r.id, msg);
+    }
   }
 }
 
 async function processQueue() {
   const { rows } = await q(
-    `SELECT * FROM "AgentRequest" WHERE status IN ('queued','approved') ORDER BY "createdAt" ASC LIMIT 3`
+    `SELECT * FROM "AgentRequest"
+     WHERE status IN ('queued','approved') AND ("nextRetryAt" IS NULL OR "nextRetryAt" <= now())
+     ORDER BY "createdAt" ASC LIMIT 3`
   );
   for (const r of rows) await runRequest(r);
 }
@@ -293,9 +447,11 @@ async function processQueue() {
 async function mirrorTick() {
   try { await mirrorKanban(); } catch (e) { log("mirrorKanban err", e.message); }
   try { await mirrorCrons(); } catch (e) { log("mirrorCrons err", e.message); }
+  try { await mirrorSessions(); } catch (e) { log("mirrorSessions err", e.message); }
   try { await mirrorHealth(); } catch (e) { log("mirrorHealth err", e.message); }
   try { await mirrorWiki(); } catch (e) { log("mirrorWiki err", e.message); }
   try { await mirrorCost(); } catch (e) { log("mirrorCost err", e.message); }
+  try { await mirrorActivity(); } catch (e) { log("mirrorActivity err", e.message); }
   try { await maybeDailyBrief(); } catch (e) { log("maybeDailyBrief err", e.message); }
 }
 

@@ -51,6 +51,28 @@ function parseCrons(raw: string): CronJob[] {
 }
 
 export async function GET() {
+  // Prefer the bridge's structured mirror (HermesCronJob); fall back to parsing
+  // the raw-text blob if it's empty (e.g. the Hermes CLI's cron output format
+  // drifted and the bridge's parser came up short — see hermes-bridge/bridge.mjs).
+  const structured = await prisma.hermesCronJob.findMany({ orderBy: { name: "asc" } });
+  if (structured.length) {
+    const jobs: CronJob[] = structured.map((j) => ({
+      id: j.id,
+      status: j.active ? "active" : "paused",
+      name: j.name,
+      schedule: j.schedule,
+      nextRun: j.nextRunAt ? j.nextRunAt.toISOString() : null,
+      lastRun: j.lastRunAt ? j.lastRunAt.toISOString() : null,
+      lastResult: j.lastRunStatus,
+      deliver: j.deliverTargets,
+      skills: j.skills.length ? j.skills.join(", ") : null,
+      script: j.monitorScript,
+      mode: null,
+    }));
+    const syncedAt = structured.reduce((max, j) => (j.syncedAt > max ? j.syncedAt : max), structured[0].syncedAt);
+    return NextResponse.json({ jobs, syncedAt: syncedAt.toISOString() });
+  }
+
   const row = await prisma.dataStore.findUnique({ where: { key: "hermes-crons" } });
   const data = (row?.data as { raw?: string; syncedAt?: string } | null) ?? {};
   const jobs = data.raw ? parseCrons(data.raw) : [];

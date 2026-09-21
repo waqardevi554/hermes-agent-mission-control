@@ -276,11 +276,11 @@ export function ApprovalInbox({ compact = false }: { compact?: boolean }) {
           ))}
           {compact && count > 3 && (
             <a
-              href="/hermes"
+              href="/agent-console"
               className="inline-flex items-center gap-1 self-start text-[12.5px] font-medium transition-colors"
               style={{ color: "var(--accent)" }}
             >
-              View all in Hermes →
+              View all in Agent Console →
             </a>
           )}
         </div>

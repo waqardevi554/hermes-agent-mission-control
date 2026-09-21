@@ -1,9 +1,12 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
 import { Line, LineChart, ResponsiveContainer } from "recharts";
 import { RotateCw, ShieldCheck, Terminal, Wifi } from "lucide-react";
 import { ConsoleTopBar } from "@/components/console-topbar";
 import { Panel, Pill, Button, Eyebrow, StatCard } from "@/components/ui/kit";
+
+interface HermesHealth { online: boolean; gateway: string; lastSeen: string | null }
 
 const SERVERS = [
   {
@@ -40,6 +43,21 @@ const MONITORS = [
 const containerTone: Record<string, "up" | "warn"> = { Running: "up", Restarting: "warn" };
 
 export default function InfrastructurePage() {
+  const [hermesHealth, setHermesHealth] = useState<HermesHealth | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch("/api/hermes/health");
+      if (r.ok) setHermesHealth(await r.json());
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const iv = setInterval(load, 15000);
+    return () => clearInterval(iv);
+  }, [load]);
+
   return (
     <>
       <ConsoleTopBar
@@ -65,6 +83,16 @@ export default function InfrastructurePage() {
           <StatCard label="Docker Containers" value="18" delta="1 restarting" deltaTone="warn" />
           <StatCard label="Global Uptime (30d)" value="99.98%" delta="+0.02%" deltaTone="up" />
           <StatCard label="SSL / Domain Expiry" value="24" delta="3 expiring" deltaTone="warn" hint="<30d" />
+        </div>
+
+        {/* real: Hermes agent's own health, via the bridge's hermes-health mirror */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <StatCard
+            label="Hermes Agent"
+            value={hermesHealth ? (hermesHealth.online ? "Online" : "Offline") : "…"}
+            delta={hermesHealth?.gateway ? `gateway ${hermesHealth.gateway}` : undefined}
+            deltaTone={hermesHealth?.online ? "up" : "warn"}
+          />
         </div>
 
         {/* server cards */}

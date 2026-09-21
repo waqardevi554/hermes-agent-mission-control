@@ -459,6 +459,9 @@ model AgentRequest {
   result        String?
   error         String?
   hermesTaskId  String?
+  retryCount    Int       @default(0)
+  maxRetries    Int       @default(3)
+  nextRetryAt   DateTime?
   decidedAt     DateTime?
   startedAt     DateTime?
   finishedAt    DateTime?
@@ -476,10 +479,40 @@ model AgentEvent {
   detail    String?
   agent     String?
   level     String   @default("info")     // info | up | warn | down
+  source    String   @default("bridge")   // "bridge" (push/pull actions) | "hermes" (real agent activity, via `hermes logs`)
   meta      Json?
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+  @@index([source])
+}
+
+model HermesCronJob {
+  id             String    @id                   // Hermes cron job id
+  name           String
+  schedule       String                          // cron expression
+  active         Boolean   @default(true)
+  nextRunAt      DateTime?
+  lastRunAt      DateTime?
+  lastRunStatus  String?
+  deliverTargets String?
+  skills         String[]
+  monitorScript  String?
+  updatedAt      DateTime  @default(now())
+  syncedAt       DateTime  @updatedAt
+
+  @@index([active])
+}
+
+model HermesSession {
+  id             String    @id                   // Hermes session id
+  title          String
+  source         String?                         // workspace/platform, e.g. "hermes-bridge", "cli", "whatsapp"
+  lastActiveAt   DateTime?
+  pinned         Boolean   @default(false)
+  syncedAt       DateTime  @updatedAt
+
+  @@index([lastActiveAt])
 }
 
 model HermesTask {

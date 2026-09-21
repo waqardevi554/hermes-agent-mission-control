@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -23,8 +24,11 @@ import {
   type ActivityLogEntry,
 } from "@/components/ui/kit";
 
-/* ── Mock data — swap for real Prisma/API reads once this screen
-   is reviewed (ClientPulseClient, AgentEvent, HermesTask). ── */
+/* ── Mock data — no real Hermes source exists for ad spend / campaign
+   health yet (confirmed during discovery: this only exists transiently
+   inside live Ads-MCP tool calls, nothing persists it). Everything else
+   on this page (Autonomous Actions, Audit Stream, Milestones) is wired
+   to real data below. ── */
 
 const CLIENT_HEALTH = [
   { client: "Sintco Dental", channels: ["Meta"], spend: "$1,240/day", target: 28, actual: 41, status: "Review" as const },
@@ -34,28 +38,81 @@ const CLIENT_HEALTH = [
   { client: "Clara Boutique", channels: ["Meta", "TikTok"], spend: "$410/day", target: 18, actual: 24, status: "Pacing" as const },
 ];
 
-const AUDIT_STREAM: ActivityLogEntry[] = [
-  { id: "1", tone: "accent", timestamp: "11:42 AM", message: <>Adjusted Meta ad-set budget for <b className="text-[var(--text)]">Sintco Dental</b> (+$150/day) after CPA drift detected.</> },
-  { id: "2", tone: "neutral", timestamp: "10:58 AM", message: <>Synced Google Ads account for <b className="text-[var(--text)]">Solaris Energy Co</b> — no anomalies found.</> },
-  { id: "3", tone: "down", timestamp: "10:20 AM", message: <>Flagged webhook staging failure on <b className="text-[var(--text)]">Nova Fitness</b> deploy pipeline.</> },
-  { id: "4", tone: "neutral", timestamp: "9:05 AM", message: "Generated weekly performance digest for 5 active accounts." },
-  { id: "5", tone: "up", timestamp: "8:40 AM", message: "Auto-approved routine budget sync (Balanced autonomy)." },
-];
-
-const MILESTONES = [
-  { title: "Sintco Dental — Landing Page v2", meta: "DNS cutover", due: "Oct 24", tone: "accent" as const },
-  { title: "Nova Fitness — CRM Webhook Migration", meta: "Blocked · review needed", due: "Overdue", tone: "down" as const },
-  { title: "Solaris Energy — Offline Conversion QA & Staging Deploy", meta: "In progress", due: "Oct 27", tone: "neutral" as const },
-  { title: "Monthly Hetzner Kernel Upgrades & Security Patch", meta: "Scheduled", due: "Oct 30", tone: "neutral" as const },
-];
-
 function statusTone(status: string): "up" | "warn" | "down" {
   if (status === "On Pace") return "up";
   if (status === "Pacing") return "warn";
   return "down";
 }
 
+interface AgentRequestRow { id: string; status: string; createdAt: string }
+interface AgentEventRow { id: string; title: string; detail: string | null; level: string; createdAt: string }
+interface HermesTaskRow { id: string; title: string; status: string; updatedAt: string }
+
+async function getJSON<T>(url: string): Promise<T | null> {
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    return (await r.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+function timeLabel(iso: string): string {
+  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+function relDays(iso: string): string {
+  const diff = new Date(iso).getTime() - Date.now();
+  const days = Math.round(diff / 86_400_000);
+  if (days < 0) return "Overdue";
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  return `${days}d`;
+}
+const EVENT_TONE: Record<string, ActivityLogEntry["tone"]> = { info: "neutral", up: "up", warn: "warn", down: "down" };
+
 export default function OverviewPage() {
+  const [requests, setRequests] = useState<AgentRequestRow[]>([]);
+  const [events, setEvents] = useState<AgentEventRow[]>([]);
+  const [tasks, setTasks] = useState<HermesTaskRow[]>([]);
+
+  const load = useCallback(async () => {
+    const [r, a, t] = await Promise.all([
+      getJSON<{ requests: AgentRequestRow[] }>("/api/hermes/requests?take=100"),
+      getJSON<{ events: AgentEventRow[] }>("/api/hermes/activity?take=8"),
+      getJSON<{ tasks: HermesTaskRow[] }>("/api/hermes/tasks"),
+    ]);
+    if (r) setRequests(r.requests ?? []);
+    if (a) setEvents(a.events ?? []);
+    if (t) setTasks(t.tasks ?? []);
+  }, []);
+
+  useEffect(() => {
+    load();
+    const iv = setInterval(load, 10000);
+    return () => clearInterval(iv);
+  }, [load]);
+
+  const autoApprovedCount = requests.filter((r) => r.status === "done" || r.status === "running").length;
+
+  const auditStream: ActivityLogEntry[] = events.map((e) => ({
+    id: e.id,
+    tone: EVENT_TONE[e.level] ?? "neutral",
+    timestamp: timeLabel(e.createdAt),
+    message: e.detail ? <>{e.title} — <span className="text-[var(--text-3)]">{e.detail.slice(0, 80)}</span></> : e.title,
+  }));
+
+  const milestones = tasks
+    .filter((t) => t.status !== "done")
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .slice(0, 4)
+    .map((t) => ({
+      title: t.title,
+      meta: t.status,
+      due: relDays(t.updatedAt),
+      tone: t.status.toLowerCase().includes("block") ? ("down" as const) : ("neutral" as const),
+    }));
+
   return (
     <>
       <ConsoleTopBar
@@ -86,7 +143,7 @@ export default function OverviewPage() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <StatCard label="Active Client Campaigns" value="14" delta="+2" deltaTone="up" hint="this month" icon={<Activity className="w-4 h-4" />} />
           <StatCard label="Total Ad Spend Managed" value="$64,280" delta="+18.2%" deltaTone="up" hint="MoM" icon={<ArrowUpRight className="w-4 h-4" />} />
-          <StatCard label="Autonomous Actions" value="142" delta="118 auto" deltaTone="neutral" hint="approved" icon={<Sparkles className="w-4 h-4" />} />
+          <StatCard label="Autonomous Actions" value={requests.length} delta={`${autoApprovedCount} auto`} deltaTone="neutral" hint="executed" icon={<Sparkles className="w-4 h-4" />} />
           <StatCard label="Dev Sprints / Builds" value="5" delta="4 deploying" deltaTone="neutral" hint="this week" icon={<Rocket className="w-4 h-4" />} />
         </div>
 
@@ -149,7 +206,7 @@ export default function OverviewPage() {
             </div>
           </Panel>
 
-          <ActivityLogPanel title="Hermes Agent Audit Stream" entries={AUDIT_STREAM} className="lg:max-h-[420px]" />
+          <ActivityLogPanel title="Hermes Agent Audit Stream" entries={auditStream} className="lg:max-h-[420px]" />
         </div>
 
         {/* milestones + quick ops */}
@@ -157,11 +214,17 @@ export default function OverviewPage() {
           <Panel className="!p-0 overflow-hidden">
             <SectionHeader label="Roadmap" title="Upcoming Milestones & Deployments" className="!mb-0 px-5 pt-4" />
             <div className="divide-y divide-[var(--line)]">
-              {MILESTONES.map((m) => (
+              {milestones.length === 0 && (
+                <p className="px-5 py-6 text-[12.5px] text-[var(--text-3)]">
+                  No in-progress kanban tasks yet — create one with the <code className="num">hermes kanban create</code> CLI
+                  or from <a href="/projects" className="text-[var(--accent)]">Projects &amp; Dev</a>.
+                </p>
+              )}
+              {milestones.map((m) => (
                 <div key={m.title} className="px-5 py-3.5 flex items-center gap-3">
                   <span
                     className="w-1.5 h-1.5 rounded-full shrink-0"
-                    style={{ background: m.tone === "down" ? "var(--down)" : m.tone === "accent" ? "var(--accent)" : "var(--text-4)" }}
+                    style={{ background: m.tone === "down" ? "var(--down)" : "var(--text-4)" }}
                   />
                   <div className="min-w-0 flex-1">
                     <p className="text-[13px] font-medium text-[var(--text)] truncate">{m.title}</p>
