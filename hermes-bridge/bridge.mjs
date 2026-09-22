@@ -90,6 +90,24 @@ async function hermesOneshot(prompt, { timeout = RUN_TIMEOUT_MS } = {}) {
   }
 }
 
+// Hermes has a separate, pre-existing skill (agency-agents-router, a
+// 273-agent specialist roster — nothing to do with this dashboard's own
+// AgentProfile registry) that prepends a one-line routing note to most
+// agency/marketing answers, e.g. "No specialist from the roster fits this
+// — ..." or "Using <Specialist> (<Division>) for this — ...", followed by
+// a blank line, a "---" separator, and the actual deliverable. Verified
+// live (2026-09-22) this fires on most real dispatches and makes truncated
+// previews (Activity Log, Command Center) read like a failure even though
+// the task succeeded. Cosmetic-only strip — this is the SKILL.md's own
+// documented convention, not something to parse defensively for every
+// possible phrasing; the "roster" keyword + "---" separator are reliable
+// enough given the skill's own required format ("name the specialist in
+// one line, then deliver the actual work").
+function stripRosterPreamble(text) {
+  const m = text.match(/^([^\n]{0,300}\broster\b[^\n]{0,300})\n+---\n+([\s\S]*)$/i);
+  return m ? m[2].trim() : text;
+}
+
 async function emit(kind, title, { detail = null, agent = "hermes", level = "info", meta = null, source = "bridge" } = {}) {
   await q(
     `INSERT INTO "AgentEvent" (id, kind, title, detail, agent, level, source, meta, "createdAt")
@@ -425,7 +443,7 @@ async function generateReportDraft(reportType, clientName, clientId) {
   const buildPrompt = REPORT_PROMPTS[reportType] || REPORT_PROMPTS["weekly-status"];
   const prompt = buildPrompt(clientName);
   const { stdout, usage } = await hermesOneshot(prompt);
-  const draft = stdout.trim();
+  const draft = stripRosterPreamble(stdout.trim());
   const cost = usage && Number.isFinite(usage.estimated_cost_usd) && usage.estimated_cost_usd >= 0
     ? usage.estimated_cost_usd : null;
   await q(
@@ -475,7 +493,7 @@ async function runRequest(r) {
     let usage = null;
     if (r.kind === "oneshot" || r.kind === "chat") {
       const out = await hermesOneshot(r.prompt || r.title);
-      result = out.stdout.trim();
+      result = stripRosterPreamble(out.stdout.trim());
       usage = out.usage;
     } else if (r.kind === "kanban") {
       result = (await hermes(["kanban", "--board", BOARD, "create", "--json", r.title], { timeout: 20000 })).trim();
