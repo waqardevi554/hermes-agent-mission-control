@@ -11,6 +11,7 @@ import {
   Bot,
   Server,
   Landmark,
+  FileText,
   Menu,
   X,
   Search,
@@ -19,14 +20,15 @@ import {
 const navItems = [
   { href: "/", label: "Overview", icon: Gauge },
   { href: "/clients", label: "Clients & Campaigns", icon: Users },
-  { href: "/projects", label: "Projects & Dev", icon: FolderKanban },
+  { href: "/projects", label: "Work", icon: FolderKanban },
   { href: "/agent-console", label: "Agent Console", icon: Bot },
+  { href: "/reporting", label: "Reporting", icon: FileText },
   { href: "/infrastructure", label: "Infrastructure", icon: Server },
   { href: "/finance", label: "Finance & Pipeline", icon: Landmark },
 ];
 
-// Mobile bottom tab bar — 5 most-used of the 6 (Finance stays in the drawer)
-const mobileTabs = navItems.filter((i) => i.href !== "/finance");
+// Mobile bottom tab bar — 5 most-used (Reporting/Finance stay in the drawer)
+const mobileTabs = navItems.filter((i) => i.href !== "/finance" && i.href !== "/reporting");
 
 function Logo() {
   return (

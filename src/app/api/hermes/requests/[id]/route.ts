@@ -13,7 +13,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const data: Record<string, unknown> = { decidedAt: new Date() };
   if (action === "approve") data.status = "approved";
   else if (action === "reject") data.status = "rejected";
-  else if (action === "edit") { data.status = "approved"; if (b.prompt) data.prompt = b.prompt.toString(); if (b.title) data.title = b.title.toString().slice(0, 200); }
+  else if (action === "edit") {
+    data.status = "approved";
+    if (b.prompt) data.prompt = b.prompt.toString();
+    if (b.title) data.title = b.title.toString().slice(0, 200);
+    if (b.clientId !== undefined) data.clientId = b.clientId || null;
+    // for kind="report.review" rows, `result` is the drafted content itself,
+    // reviewable/editable here before approval — not agent instructions.
+    if (b.result !== undefined) data.result = b.result ? b.result.toString().slice(0, 8000) : null;
+  }
   else return NextResponse.json({ error: "action must be approve|reject|edit" }, { status: 400 });
 
   const row = await prisma.agentRequest.update({ where: { id }, data });

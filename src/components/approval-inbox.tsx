@@ -27,6 +27,7 @@ interface Req {
   status: string;
   result: string | null;
   error: string | null;
+  clientId: string | null;
   createdAt: string;
 }
 
@@ -69,6 +70,8 @@ function InboxCard({
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(req.title);
   const [draftPrompt, setDraftPrompt] = useState(req.prompt ?? "");
+  const [draftResult, setDraftResult] = useState(req.result ?? "");
+  const isDraftContent = req.kind === "report.review" && !!req.result;
 
   const patch = async (body: Record<string, unknown>) => {
     setBusy(true);
@@ -107,22 +110,37 @@ function InboxCard({
             onChange={(e) => setDraftTitle(e.target.value)}
             className="w-full bg-transparent text-[14px] font-medium text-[var(--text)] px-3 py-2 rounded-[8px] border border-[var(--line)] outline-none focus:border-[color-mix(in_srgb,var(--accent)_45%,transparent)]"
           />
-          <textarea
-            value={draftPrompt}
-            onChange={(e) => setDraftPrompt(e.target.value)}
-            rows={3}
-            className="w-full bg-transparent text-[13px] text-[var(--text-2)] px-3 py-2 rounded-[8px] border border-[var(--line)] outline-none focus:border-[color-mix(in_srgb,var(--accent)_45%,transparent)] resize-y"
-          />
+          {isDraftContent ? (
+            <textarea
+              value={draftResult}
+              onChange={(e) => setDraftResult(e.target.value)}
+              rows={8}
+              className="w-full bg-transparent text-[13px] text-[var(--text-2)] px-3 py-2 rounded-[8px] border border-[var(--line)] outline-none focus:border-[color-mix(in_srgb,var(--accent)_45%,transparent)] resize-y"
+            />
+          ) : (
+            <textarea
+              value={draftPrompt}
+              onChange={(e) => setDraftPrompt(e.target.value)}
+              rows={3}
+              className="w-full bg-transparent text-[13px] text-[var(--text-2)] px-3 py-2 rounded-[8px] border border-[var(--line)] outline-none focus:border-[color-mix(in_srgb,var(--accent)_45%,transparent)] resize-y"
+            />
+          )}
         </div>
       ) : (
         <>
           <h3 className="text-[15px] font-medium text-[var(--text)] leading-snug">
             {req.title}
           </h3>
-          {req.prompt && (
-            <p className="mt-1.5 text-[13px] text-[var(--text-2)] leading-snug line-clamp-2">
-              {req.prompt}
+          {isDraftContent ? (
+            <p className="mt-1.5 text-[13px] text-[var(--text-2)] leading-snug whitespace-pre-wrap line-clamp-6">
+              {req.result}
             </p>
+          ) : (
+            req.prompt && (
+              <p className="mt-1.5 text-[13px] text-[var(--text-2)] leading-snug line-clamp-2">
+                {req.prompt}
+              </p>
+            )
           )}
         </>
       )}
@@ -133,11 +151,11 @@ function InboxCard({
             <button
               type="button"
               onClick={() =>
-                patch({
-                  action: "edit",
-                  title: draftTitle.trim(),
-                  prompt: draftPrompt,
-                })
+                patch(
+                  isDraftContent
+                    ? { action: "edit", title: draftTitle.trim(), result: draftResult }
+                    : { action: "edit", title: draftTitle.trim(), prompt: draftPrompt }
+                )
               }
               className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[12px] font-semibold transition-colors"
               style={{
@@ -156,6 +174,7 @@ function InboxCard({
                 setEditing(false);
                 setDraftTitle(req.title);
                 setDraftPrompt(req.prompt ?? "");
+                setDraftResult(req.result ?? "");
               }}
               className="btn-ghost inline-flex items-center gap-1.5 px-3.5 py-1.5 text-[12px] font-medium"
             >
@@ -203,21 +222,22 @@ function InboxCard({
 }
 
 // ── Main ──────────────────────────────────────────────────
-export function ApprovalInbox({ compact = false }: { compact?: boolean }) {
+export function ApprovalInbox({ compact = false, kindFilter }: { compact?: boolean; kindFilter?: string }) {
   const [requests, setRequests] = useState<Req[]>([]);
   const [pending, setPending] = useState(0);
   const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {
+    const kindParam = kindFilter ? `&kind=${encodeURIComponent(kindFilter)}` : "";
     const data = await getJSON<{ requests: Req[]; pending: number }>(
-      "/api/hermes/requests?status=awaiting_approval&take=50"
+      `/api/hermes/requests?status=awaiting_approval&take=50${kindParam}`
     );
     if (data) {
       setRequests(data.requests ?? []);
       setPending(data.pending ?? data.requests?.length ?? 0);
     }
     setLoaded(true);
-  }, []);
+  }, [kindFilter]);
 
   useEffect(() => {
     load();

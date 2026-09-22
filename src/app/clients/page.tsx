@@ -1,10 +1,61 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Area, AreaChart, ResponsiveContainer } from "recharts";
 import { Download, Plus, RefreshCw } from "lucide-react";
 import { ConsoleTopBar } from "@/components/console-topbar";
 import { Panel, Pill, Button, StatCard, Eyebrow, ActivityLogPanel, type ActivityLogEntry } from "@/components/ui/kit";
+
+// Ad-spend/ROAS/retainer figures below stay mock — no real data source exists
+// yet (Meta/Google Ads integration is Phase 2, see the approved architecture
+// plan §13/§17). Client *identity* is real as of this pass (the Client model),
+// so onboarding creates a real row even though the metrics around it are mock.
+interface RealClient { id: string; clientName: string }
+
+function OnboardClientForm({ onCreated }: { onCreated: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!name.trim()) return;
+    setBusy(true);
+    try {
+      await fetch("/api/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientName: name.trim() }),
+      });
+      setName("");
+      setOpen(false);
+      onCreated();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <Button variant="accent" size="sm" onClick={() => setOpen(true)}>
+        <Plus className="w-3.5 h-3.5" /> Onboard Client
+      </Button>
+    );
+  }
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        autoFocus
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && submit()}
+        placeholder="Client name"
+        className="bg-transparent border border-[var(--line)] rounded-[var(--r-sm)] px-3 py-1.5 text-[12.5px] text-[var(--text)] placeholder-[var(--text-3)] outline-none focus:border-[var(--line-strong)]"
+      />
+      <Button variant="primary" size="sm" onClick={submit} disabled={busy || !name.trim()}>Add</Button>
+      <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>Cancel</Button>
+    </div>
+  );
+}
 
 const ACCOUNTS = [
   { client: "Sintco Dental", score: 87, retainer: "$6,800/mo · Growth", channels: ["Meta", "Google"], spend: "$12,400", roas: "4.6x", trend: [4, 6, 5, 8, 7, 9, 10] },
@@ -47,6 +98,15 @@ function MiniTrend({ data, color }: { data: number[]; color: string }) {
 export default function ClientsPage() {
   const [filter, setFilter] = useState<"All" | "Meta" | "Google" | "TikTok">("All");
   const filtered = ACCOUNTS.filter((a) => filter === "All" || a.channels.includes(filter));
+  const [realClients, setRealClients] = useState<RealClient[]>([]);
+
+  const loadClients = useCallback(async () => {
+    try {
+      const r = await fetch("/api/clients");
+      if (r.ok) setRealClients((await r.json()).clients ?? []);
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => { loadClients(); }, [loadClients]);
 
   return (
     <>
@@ -55,7 +115,7 @@ export default function ClientsPage() {
         actions={
           <>
             <Button variant="ghost" size="sm"><RefreshCw className="w-3.5 h-3.5" /> Sync Live Metrics</Button>
-            <Button variant="accent" size="sm"><Plus className="w-3.5 h-3.5" /> Onboard Client</Button>
+            <OnboardClientForm onCreated={loadClients} />
           </>
         }
       />
@@ -72,7 +132,7 @@ export default function ClientsPage() {
         </div>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-          <StatCard label="Active Accounts" value="14" delta="+2" deltaTone="up" hint="onboarding" />
+          <StatCard label="Onboarded Clients" value={realClients.length} hint="real" />
           <StatCard label="Total Ad Spend Run-Rate" value="$64,280" delta="+18.2%" deltaTone="up" hint="MoM" />
           <StatCard label="Blended ROAS" value="3.82x" delta="+0.4x" deltaTone="up" hint="vs last month" />
           <StatCard label="Blended Lead CPA" value="$24.10" delta="-7.3%" deltaTone="up" hint="vs goal" />
@@ -143,6 +203,20 @@ export default function ClientsPage() {
           </Panel>
 
           <div className="space-y-4">
+            <Panel className="!p-0 overflow-hidden">
+              <div className="px-4 py-3 border-b border-[var(--line)]"><Eyebrow>Onboarded Clients (real)</Eyebrow></div>
+              <div className="divide-y divide-[var(--line)]">
+                {realClients.length === 0 && (
+                  <p className="px-4 py-4 text-[11.5px] text-[var(--text-3)]">None yet — use Onboard Client above.</p>
+                )}
+                {realClients.map((c) => (
+                  <div key={c.id} className="px-4 py-2.5 text-[12.5px] text-[var(--text)]">
+                    {c.clientName}
+                  </div>
+                ))}
+              </div>
+            </Panel>
+
             <Panel className="!p-0 overflow-hidden">
               <div className="px-4 py-3 border-b border-[var(--line)]"><Eyebrow>Active Ad Units</Eyebrow></div>
               <div className="divide-y divide-[var(--line)]">

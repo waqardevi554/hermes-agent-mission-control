@@ -44,6 +44,17 @@ integration, memory). This repo is only the *website* half of the pair.
   *any* route, this was a real skeleton key. Fixed and the secret rotated in
   production. See git log (commit "Fix hardcoded internal-secret leaks...")
   for the full writeup, not repeated here.
+- **2026-09-22: "Agency OS MVP" pass** — before this, the dashboard was a
+  reskinned Hermes cockpit with `/clients`/`/finance` fully mock. A product-
+  architecture brainstorm (see the plan file this session produced, or ask
+  the user for the doc) reframed the product as an agency operating system
+  and named six concrete build items, all implemented and live as of this
+  date: a real `Client` entity threaded through the bus (§6), Command Center
+  rebuilt around exceptions (§12), Work's typed-tag model (§12), a real
+  Agent registry with cost/token tracking (§6/§12), bridge-driven Reporting
+  (`/reporting`, new), and structured Finance models. See §6 and §12 below
+  for what's real now vs. still thin/manual, and §14 for two real bugs this
+  pass surfaced and fixed (not pre-existing-and-ignored — actually fixed).
 - The old template's Content OS / growth-tooling routes (`/agents`,
   `/articles`, `/content-os`, `/garden`, `/hermes`, `/ideas`, `/longform`,
   `/memory-wiki`, `/tasks`, `/watchlist-radar`, `/x`, `/x-analytics`,
@@ -122,9 +133,57 @@ Hermy HQ (Next.js, this repo)  <---->  Postgres (shared)  <---->  hermes-bridge 
 - Nothing on the Hermes/bridge side is exposed to the internet; only outbound
   access to Postgres + the local `hermes` CLI is needed.
 - **Kanban is meant to become the real task-tracking system going forward**
-  (per the user, 2026-09-21) — `/projects` maps Hermes's kanban status values
-  onto its 4 visual columns via the same heuristic as the orphaned
-  `/hermes` page's `TaskBoard` (don't invent a new mapping if you touch this).
+  (per the user, 2026-09-21) — `/projects` (labeled "Work" in nav as of
+  2026-09-22) maps Hermes's kanban status values onto its 4 visual columns
+  via the same heuristic as the orphaned `/hermes` page's `TaskBoard` (don't
+  invent a new mapping if you touch this). As of 2026-09-22, `HermesTask`
+  also carries dashboard-owned `clientId`/`type` tags (content/ads/seo/web/
+  creative) — Hermes's kanban CLI has no such concepts, so these are set via
+  `PATCH /api/hermes/tasks/[id]` from the Work board's inline tag editor, and
+  survive every mirror tick because `mirrorKanban()`'s `UPDATE` clause never
+  touches them (verified directly against the SQL before relying on it).
+- **Reporting (`/reporting`, added 2026-09-22) is bridge-driven, not
+  Hermes-cron-driven** — `hermes cron runs <id>` only returns one-line status,
+  not content, so a `"report: <type>: <clientName>"`-named `HermesCronJob` is
+  a *schedule marker only* (created with `--no-agent --script
+  report-schedule-marker.sh` so Hermes never independently runs a real,
+  costly, duplicate agent on that schedule — the script lives at
+  `~/.hermes/scripts/report-schedule-marker.sh` on the Hermes host, outside
+  this repo). The bridge's `maybeGenerateReports()` checks mirrored
+  `HermesCronJob` rows itself each tick and, when one is due, drafts the
+  report via `hermesOneshot()` and inserts an `AgentRequest(kind=
+  "report.review", status="awaiting_approval")` — it surfaces in the
+  existing `ApprovalInbox` (now with an optional `kindFilter` prop) with no
+  new UI, is editable in place, and delivery to the client stays manual
+  (copy the approved text out) rather than wiring `--deliver`, deliberately
+  avoiding the same delivery-failure mode already seen on the real
+  `Sintco payment watch` job (see git log / the implementation plan for
+  detail).
+- **Agent cost/token tracking (2026-09-22)**: `hermesOneshot()` in the
+  bridge wraps oneshot/chat runs with `hermes -z ... --usage-file <tmp>`,
+  capturing real `inputTokens`/`outputTokens`/`model`/`provider` on
+  `AgentRequest`. `estimated_cost_usd` from that file is **not trustworthy**
+  (verified live: returned a large negative value for a trivial prompt — an
+  upstream Hermes bug in cost estimation for `openrouter/auto`) — only
+  stored when `>= 0`, else left `null`. Don't assume a null `costUsd` means
+  the run is unaccounted for; check `inputTokens`/`outputTokens` instead.
+- **Agent registry (`/api/hermes/agents`, 2026-09-22 — deliberately NOT
+  `/api/agents`, which already backs the unrelated legacy `AgentState`
+  decorative-persona system below; a first pass overwrote that file by
+  mistake before catching it via `git status` showing "M" instead of the
+  expected "??" for a supposedly-new file — worth remembering to check for
+  before creating a file at a path that sounds generic)** is a small, dashboard-owned
+  classification layer (`AgentProfile`: researcher/writer/campaign-optimizer/
+  qa/reporter/general, seeded via `scripts/seed-agent-profiles.mjs`), **not**
+  a mirror of distinct real Hermes agent identities — verified live that
+  Hermes has exactly one profile (`default`) and every real `AgentEvent` row
+  is attributed to the literal string `"hermes"`, so there's no native
+  per-role signal to mirror. `AgentRequest.role` is set at dispatch time
+  (explicit, or a keyword heuristic in `inferRole()`); status/currentTask/
+  totalCost are computed at read time from live `AgentRequest` data, not
+  stored — a deliberate fix of the exact flaw (denormalized fields drifting
+  from truth) that made the old fictional `AgentState` model bad, while
+  reusing its field shape.
 
 ### Hermes's *own* web dashboard — separate system, worth knowing about
 
@@ -150,8 +209,8 @@ Roughly four families of models:
 
 1. **Auth** — `Account`, `Session`, `User`, `VerificationToken` (standard NextAuth/Prisma adapter tables)
 2. **Content OS / creative tooling** — `Draft`, `TweetMetric`, `Idea`, `ContentCalendar`, `YoutubeIdea`, `YoutubeScript`, `YoutubeFeedback`, `LongformScript`, `Article`, `SavedTitle`, `ContentRequest`, `BattleRoyaleBot`
-3. **Hermes bus** — `AgentRequest`, `AgentEvent`, `HermesTask`, `HermesMemory`, `HermesCronJob`, `HermesSession`, `DataStore`, `Brief`, `Mission` (this is the message-bus plumbing described in §5 — treat carefully, it's load-bearing infra, not a feature to redesign casually). `HermesCronJob`/`HermesSession` and `AgentRequest.retryCount`/`maxRetries`/`nextRetryAt` and `AgentEvent.source` were added 2026-09-21. **`Brief` and `Mission` are dead/unused** — the bridge writes briefings into `DataStore["hermes-briefing"]` instead, and nothing writes `Mission` at all; don't assume either is populated. `AgentState`/`AgentBusMessage` are a **separate, fictional, decorative multi-persona system** (Max/Sage/Knox/Nova/Pixel) that calls OpenRouter directly with hardcoded prompts — **zero connection to the real Hermes agent**, easy to confuse with the real bus given the naming, don't build real-data features against it.
-4. **Client Pulse** — `ClientPulseClient`, `ClientPulseChat`, `ClientPulseMessage`, `ClientPulseAnalysis`, `ClientPulseAlert` (see §8 — this is the module most directly relevant to an agency rebuild, and it's currently an empty shell)
+3. **Hermes bus** — `AgentRequest`, `AgentEvent`, `HermesTask`, `HermesMemory`, `HermesCronJob`, `HermesSession`, `DataStore`, `Brief`, `Mission`, `AgentProfile` (this is the message-bus plumbing described in §5 — treat carefully, it's load-bearing infra, not a feature to redesign casually). `HermesCronJob`/`HermesSession` and `AgentRequest.retryCount`/`maxRetries`/`nextRetryAt` and `AgentEvent.source` were added 2026-09-21. **2026-09-22**: `AgentRequest` gained `clientId`/`role`/`costUsd`/`inputTokens`/`outputTokens`/`model`/`provider`; `HermesTask` gained `clientId`/`type` (both dashboard-owned, see §5); `HermesCronJob.nextRunAt`/`lastRunAt` were changed to `@db.Timestamptz` (see the timezone note in §14 — a real bug, not cosmetic, that this pass found and fixed); new `AgentProfile` model (the agent registry, §5). **`Brief` and `Mission` are dead/unused** — the bridge writes briefings into `DataStore["hermes-briefing"]` instead, and nothing writes `Mission` at all; don't assume either is populated. `AgentState`/`AgentBusMessage` are a **separate, fictional, decorative multi-persona system** (Max/Sage/Knox/Nova/Pixel) that calls OpenRouter directly with hardcoded prompts — **zero connection to the real Hermes agent**, easy to confuse with the real bus given the naming, don't build real-data features against it.
+4. **Client / Finance** — `Client` (renamed from `ClientPulseClient` 2026-09-22 — same table, same relations to the Client Pulse models below, just promoted to be the general-purpose client entity per §8/§6 of the implementation plan; had zero rows and zero code references by name outside `schema.prisma` at rename time, so this was a genuinely safe, no-migration-risk rename, not a risky one), `ClientPulseChat`, `ClientPulseMessage`, `ClientPulseAnalysis`, `ClientPulseAlert` (see §8 — the Telegram/Notion pipeline behind these is still an empty shell, unchanged by this pass), `Invoice`, `RecurringService` (new 2026-09-22, thin/manual — no billing API integration yet, that's future work)
 
 ## 7. Tasheer Digital — brand & business context
 
@@ -187,7 +246,10 @@ Business facts (from Honcho memory — see §9 for how to query more):
 ## 8. Client Pulse — the client-health board (currently a shell)
 
 Route: `/client-pulse` (`src/app/client-pulse/page.tsx`), API:
-`src/app/api/client-pulse/route.ts` + `.../map-chat/route.ts`.
+`src/app/api/client-pulse/route.ts` + `.../map-chat/route.ts`. These routes
+never referenced `prisma.clientPulseClient` by name (only via the child
+models' relations), so the 2026-09-22 `Client` rename (§6) didn't require
+touching them — still worth knowing if you're reading this code fresh.
 
 Concept: per-client health scorecards (sentiment / response-SLA / check-in
 cadence / renewal-risk, rolled into one `overallScore` + a
@@ -258,18 +320,32 @@ Google sign-in is further restricted to emails in `ALLOWED_EMAILS`
 ## 12. UI structure & conventions (current, post-rebuild — 2026-09-21)
 
 - **Live IA** (linked in `src/components/sidebar.tsx`), one directory per
-  route: `page.tsx` (Overview), `clients`, `projects`, `agent-console`,
-  `infrastructure`, `finance`. Each composes `ConsoleTopBar` +
-  `src/components/ui/kit.tsx` primitives.
-- **Real data (as of 2026-09-21)**: `/` (autonomous-action count, activity
-  stream, kanban milestones), `/agent-console` (dispatch, approvals, activity
-  log — composed from the pre-existing `ApprovalInbox`/`HermesDispatches`
-  components rather than reimplemented), `/projects` (real kanban board via
-  `/api/hermes/tasks`), `/infrastructure` (added a real Hermes-health
-  `StatCard`, VPS/Docker cards stay mock — unrelated to Hermes). **Still mock,
-  deliberately**: `/clients`, `/finance` (no Hermes data source exists for
-  ad spend/campaigns or structured invoicing — see §2), and the Agent
-  Console's autonomy-mode toggle (no real Hermes-side runtime equivalent).
+  route: `page.tsx` (Overview / "Command Center"), `clients`, `projects`
+  (labeled "Work" in nav as of 2026-09-22), `agent-console`, `reporting`
+  (new 2026-09-22), `infrastructure`, `finance`. Each composes
+  `ConsoleTopBar` + `src/components/ui/kit.tsx` primitives.
+- **Real data (as of 2026-09-22)**: `/` (Command Center — rebuilt around
+  real, computed exceptions: SLA-breached approvals, failed/blocked items,
+  a real per-client exceptions table, plus `<ApprovalInbox compact />`
+  inline; KPI tiles are real counts, no fabricated ad-spend figures
+  anymore), `/agent-console` (dispatch + approvals + activity log, as
+  before, **plus** a real Agent Fleet grid from `/api/hermes/agents` and a role
+  selector on dispatch), `/projects` ("Work" — real kanban **plus**
+  type/client filter pills and an inline per-task tag editor), `/reporting`
+  (new — pending report drafts via `<ApprovalInbox kindFilter=
+  "report.review" />`, a schedule-creation form, and history), `/finance`
+  (real `Invoice`/`RecurringService` via new API routes; the old mock
+  `DEALS` sales-pipeline panel and "Fast Deal Capture" form were removed
+  entirely — that's CRM functionality the architecture plan said should
+  stay outside Hermes, not wired to anything), `/clients` (the "Onboard
+  Client" button now creates a real `Client` row and a small real roster
+  panel shows it — but the ad-spend/ROAS/retainer table stays intentionally
+  mock, no data source exists, see §2/§17 of the implementation plan),
+  `/infrastructure` (unchanged from 2026-09-21 — real Hermes-health
+  `StatCard`, VPS/Docker cards stay mock). **Still mock, deliberately**:
+  `/clients`'s ad-spend/campaign table (no Meta/Google Ads integration
+  exists yet — Phase 2), and the Agent Console's autonomy-mode toggle (no
+  real Hermes-side runtime equivalent).
 - **Unlinked legacy routes** (code untouched, not in nav, not maintained):
   `agents`, `articles`, `client-pulse`, `content-os`, `garden`, `hermes`,
   `ideas`, `longform`, `memory-wiki`, `tasks`, `watchlist-radar`, `x`,
@@ -362,3 +438,43 @@ After any change meant to go live: `npm run build` in `/opt/hermyhq`, then
   Triggering one real request and inspecting the actual output before
   finalizing the design (see `mirrorActivity()` in `hermes-bridge/bridge.mjs`)
   caught this; guessing from documentation alone would not have.
+- **`timestamp` (without time zone) Postgres columns + the bridge's raw
+  `pg.Pool` writes are a real trap on this server.** The VPS runs Europe/
+  Berlin (CEST, UTC+2), not UTC. `node-pg`, when given a JS `Date` object as
+  a bound parameter for a `timestamp without time zone` column, serializes
+  it using the process's **local** wall-clock time, not UTC — so every such
+  write was silently ~2h ahead of true UTC. This wasn't cosmetic: it broke
+  `maybeGenerateReports()`'s `nextRunAt <= now()` due-check outright (found
+  2026-09-22 while live-testing Reporting, not from a report or hunch).
+  Fixed by adding `@db.Timestamptz` to `HermesCronJob.nextRunAt`/
+  `lastRunAt` — Postgres's `ALTER COLUMN ... TYPE timestamptz` correctly
+  reinterpreted the existing skewed values using the session's Europe/Berlin
+  timezone, so this was a safe in-place fix, not a data-loss risk. **If you
+  add a new DateTime field the bridge writes via raw SQL (not Prisma
+  Client), add `@db.Timestamptz` from the start** — Prisma's default for
+  `DateTime` on `postgresql` is the un-annotated (timezone-naive) type, and
+  Prisma Client's own writes are fine (it round-trips correctly), only the
+  bridge's raw `pg` parameter binding hits this.
+- **`hermes cron create --script` wants a path relative to
+  `~/.hermes/scripts/`, not absolute — verified live, not assumed.** Passing
+  the full `path.join(os.homedir(), ".hermes", "scripts", "...")` path (the
+  first instinct) fails with "Script path must be relative to
+  ~/.hermes/scripts/" but **exits 0 and puts the error in stdout**, not
+  stderr — so `execFileP` doesn't throw and the bridge's `AgentRequest`
+  lands on `status='done'` with the CLI's error text sitting in `result`,
+  not `status='failed'`. Don't assume a Hermes CLI subprocess that exits 0
+  actually succeeded at what it claims to do; when a command's job is to
+  create something, it's worth confirming the thing was actually created
+  (this is how `REPORT_MARKER_SCRIPT` in `hermes-bridge/bridge.mjs` got
+  caught and fixed, by checking `hermes cron list --all` for the new job
+  rather than trusting the create command's own exit code).
+- **When live-testing a due-date/schedule-based feature, don't backdate the
+  mirrored copy of a value that gets re-synced from the real source every
+  tick — the resync will just overwrite your test value back to the truth
+  before your check runs.** Backdating `HermesCronJob.nextRunAt` directly in
+  Postgres to simulate "due" didn't work, because `mirrorCrons()` re-pulls
+  the real value from `hermes cron list --all` on every 30s tick, before
+  `maybeGenerateReports()` gets to check it — so the fake backdate is
+  clobbered within one tick. The correct test was creating a real Hermes
+  cron with a near-term schedule (`"1m"`) so the *actual* source of truth
+  becomes due, not faking the mirror.

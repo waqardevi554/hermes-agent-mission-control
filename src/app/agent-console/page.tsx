@@ -24,6 +24,16 @@ interface Health {
   lastSeen: string | null;
 }
 
+interface Agent {
+  role: string;
+  name: string;
+  emoji: string | null;
+  status: "running" | "idle" | "offline";
+  currentTask: string | null;
+  totalCost: number | null;
+  requestCount: number;
+}
+
 async function getJSON<T>(url: string): Promise<T | null> {
   try {
     const r = await fetch(url);
@@ -44,20 +54,24 @@ export default function AgentConsolePage() {
   const [mode, setMode] = useState<(typeof MODES)[number]>("Balanced");
   const [health, setHealth] = useState<Health | null>(null);
   const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
 
   const [prompt, setPrompt] = useState("");
+  const [role, setRole] = useState("");
   const [sideEffecting, setSideEffecting] = useState(false);
   const [dispatching, setDispatching] = useState(false);
   const mounted = useRef(true);
 
   const load = useCallback(async () => {
-    const [h, a] = await Promise.all([
+    const [h, a, ag] = await Promise.all([
       getJSON<Health>("/api/hermes/health"),
       getJSON<{ events: ActivityEvent[] }>("/api/hermes/activity?take=30"),
+      getJSON<{ agents: Agent[] }>("/api/hermes/agents"),
     ]);
     if (!mounted.current) return;
     if (h) setHealth(h);
     if (a) setEvents(a.events ?? []);
+    if (ag) setAgents(ag.agents ?? []);
   }, []);
 
   useEffect(() => {
@@ -75,14 +89,14 @@ export default function AgentConsolePage() {
       await fetch("/api/hermes/dispatch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "oneshot", title, prompt: title, sideEffecting }),
+        body: JSON.stringify({ kind: "oneshot", title, prompt: title, sideEffecting, role: role || undefined }),
       });
       setPrompt("");
       await load();
     } finally {
       setDispatching(false);
     }
-  }, [prompt, sideEffecting, dispatching, load]);
+  }, [prompt, role, sideEffecting, dispatching, load]);
 
   return (
     <>
@@ -131,6 +145,16 @@ export default function AgentConsolePage() {
             placeholder="Dispatch a task to Hermes…"
             className="flex-1 bg-transparent border border-[var(--line)] rounded-[var(--r-sm)] px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-3)] outline-none focus:border-[var(--line-strong)]"
           />
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className="bg-transparent text-[12.5px] text-[var(--text-2)] px-2.5 py-2 rounded-[var(--r-sm)] border border-[var(--line)] outline-none shrink-0"
+          >
+            <option value="">Auto-assign role</option>
+            {agents.map((a) => (
+              <option key={a.role} value={a.role}>{a.emoji} {a.name}</option>
+            ))}
+          </select>
           <label className="flex items-center gap-1.5 text-[12px] text-[var(--text-2)] px-1 shrink-0">
             <input type="checkbox" checked={sideEffecting} onChange={(e) => setSideEffecting(e.target.checked)} className="accent-[var(--accent)]" />
             Side-effecting
@@ -139,6 +163,28 @@ export default function AgentConsolePage() {
             <Send className="w-3.5 h-3.5" /> Dispatch
           </Button>
         </Panel>
+
+        {/* agent fleet — real registry (AgentProfile) joined with live status
+            computed from AgentRequest; see /api/agents */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+          {agents.map((a) => (
+            <Panel key={a.role} className="p-3.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[18px]">{a.emoji}</span>
+                <Pill tone={a.status === "running" ? "up" : a.status === "idle" ? "neutral" : "neutral"}>
+                  {a.status}
+                </Pill>
+              </div>
+              <p className="mt-2 text-[12.5px] font-medium text-[var(--text)] truncate">{a.name}</p>
+              <p className="mt-0.5 text-[11px] text-[var(--text-3)] truncate">
+                {a.currentTask ?? `${a.requestCount} request${a.requestCount === 1 ? "" : "s"}`}
+              </p>
+              {a.totalCost != null && (
+                <p className="mt-1 num text-[10.5px] text-[var(--text-3)]">${a.totalCost.toFixed(4)}</p>
+              )}
+            </Panel>
+          ))}
+        </div>
 
         <div className="grid lg:grid-cols-[1fr_360px] gap-5 items-start">
           <div className="space-y-6">

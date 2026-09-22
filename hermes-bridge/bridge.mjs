@@ -38,6 +38,14 @@ const MIRROR_MS = Number(process.env.BRIDGE_MIRROR_MS || 30000);
 const RUN_TIMEOUT_MS = Number(process.env.BRIDGE_RUN_TIMEOUT_MS || 240000);
 const WIKI_DIR = process.env.HERMES_WIKI || path.join(os.homedir(), ".hermes", "wiki");
 const BRIEF_HOUR = Number(process.env.BRIEF_HOUR || 8);   // local hour to auto-generate the daily brief
+// "report: " cron jobs are schedule-only markers on the Hermes side (see
+// maybeGenerateReports() below) — this no-op script + --no-agent keeps Hermes
+// from independently running a real (costly, duplicate) agent on that schedule.
+// `hermes cron create --script` requires a path relative to ~/.hermes/scripts/
+// (verified live: an absolute path is rejected), so this is just the filename —
+// the file itself lives at ~/.hermes/scripts/report-schedule-marker.sh.
+const REPORT_MARKER_SCRIPT = "report-schedule-marker.sh";
+const REPORT_NAME_PREFIX = "report: ";
 const BRIEF_PROMPT =
   "You are the operator's chief of staff. Produce today's brief. Read your memory wiki open-loops " +
   "(~/.hermes/wiki), the kanban board, and recent activity. Output ONLY valid JSON (no prose, no code fences) " +
@@ -63,6 +71,23 @@ const q = (text, params) => pool.query(text, params);
 async function hermes(args, { timeout = 30000 } = {}) {
   const { stdout } = await execFileP(HERMES, args, { timeout, maxBuffer: 8 * 1024 * 1024 });
   return stdout;
+}
+
+// Same as hermes(["-z", prompt]) but also captures per-invocation token/cost
+// usage via --usage-file. `estimated_cost_usd` is unreliable (verified live:
+// returned a large negative value for a trivial prompt — an upstream Hermes
+// bug in cost estimation for openrouter/auto) — callers must validate it
+// themselves before storing; token counts are reliable.
+async function hermesOneshot(prompt, { timeout = RUN_TIMEOUT_MS } = {}) {
+  const usageFile = path.join(os.tmpdir(), `hermes-usage-${randomUUID()}.json`);
+  try {
+    const stdout = await hermes(["-z", prompt, "--usage-file", usageFile], { timeout });
+    let usage = null;
+    try { usage = JSON.parse(fs.readFileSync(usageFile, "utf8")); } catch { /* no usage file written */ }
+    return { stdout, usage };
+  } finally {
+    try { fs.unlinkSync(usageFile); } catch { /* already gone, or never written */ }
+  }
 }
 
 async function emit(kind, title, { detail = null, agent = "hermes", level = "info", meta = null, source = "bridge" } = {}) {
@@ -373,21 +398,94 @@ async function maybeDailyBrief() {
   }
 }
 
+/* ─────────────── Reporting (item 5: bridge-driven, HermesCronJob = schedule only) ───────────────
+ * "report: <type>: <clientName>" HermesCronJob rows (mirrored from a Hermes-side
+ * no-agent/no-op cron, see REPORT_MARKER_SCRIPT) are schedule markers only. This
+ * function checks them each mirror tick and, when due, does the actual drafting
+ * itself via hermesOneshot() — a small, fixed set of prompts, not a generic
+ * template system — then inserts an awaiting_approval AgentRequest that surfaces
+ * in the existing ApprovalInbox with zero new UI. A per-job DataStore cursor
+ * (keyed on the exact due nextRunAt) stops the same due date from re-drafting
+ * on every 30s tick before Hermes's own schedule advances nextRunAt again.
+ */
+const REPORT_PROMPTS = {
+  "weekly-status": (clientName) =>
+    `Draft a concise weekly status update for the agency's client "${clientName}". Include: work completed ` +
+    "this week, what's in progress, any blockers needing the client's input, and what's planned next week. " +
+    "Write it as a ready-to-send client-facing message — clear, professional, no filler. Output only the " +
+    "report text, no preamble, no markdown code fences.",
+  "monthly-summary": (clientName) =>
+    `Draft a concise monthly performance summary for the agency's client "${clientName}". Include: key ` +
+    "results/deliverables this month, notable wins, any open issues, and priorities for next month. Write " +
+    "it as a ready-to-send client-facing message — clear, professional, no filler. Output only the report " +
+    "text, no preamble, no markdown code fences.",
+};
+
+async function generateReportDraft(reportType, clientName, clientId) {
+  const buildPrompt = REPORT_PROMPTS[reportType] || REPORT_PROMPTS["weekly-status"];
+  const prompt = buildPrompt(clientName);
+  const { stdout, usage } = await hermesOneshot(prompt);
+  const draft = stdout.trim();
+  const cost = usage && Number.isFinite(usage.estimated_cost_usd) && usage.estimated_cost_usd >= 0
+    ? usage.estimated_cost_usd : null;
+  await q(
+    `INSERT INTO "AgentRequest"
+       (id, origin, kind, title, prompt, "sideEffecting", status, result, "clientId",
+        "costUsd", "inputTokens", "outputTokens", model, provider, "createdAt", "updatedAt")
+     VALUES ($1,'hermes','report.review',$2,$3,true,'awaiting_approval',$4,$5,$6,$7,$8,$9,$10, now(), now())`,
+    [randomUUID(), `Report draft: ${clientName} (${reportType})`.slice(0, 200), prompt, draft, clientId,
+     cost, usage?.input_tokens ?? null, usage?.output_tokens ?? null, usage?.model ?? null, usage?.provider ?? null]
+  );
+  await emit("run", `Report drafted: ${clientName} (${reportType})`, { level: "up" });
+}
+
+async function maybeGenerateReports() {
+  const { rows: jobs } = await q(
+    `SELECT * FROM "HermesCronJob" WHERE active = true AND name LIKE $1 AND "nextRunAt" IS NOT NULL AND "nextRunAt" <= now()`,
+    [`${REPORT_NAME_PREFIX}%`]
+  );
+  for (const job of jobs) {
+    const cursorKey = `report-cursor:${job.id}`;
+    const { rows: cursorRows } = await q(`SELECT data FROM "DataStore" WHERE key=$1`, [cursorKey]);
+    const dueIso = job.nextRunAt.toISOString();
+    if (cursorRows[0]?.data?.lastHandledNextRunAt === dueIso) continue; // already drafted for this due date
+
+    // name format: "report: <type>: <clientName>" (set by the dashboard's /reporting create form)
+    const rest = job.name.slice(REPORT_NAME_PREFIX.length);
+    const sep = rest.indexOf(":");
+    const reportType = sep >= 0 ? rest.slice(0, sep).trim() : "weekly-status";
+    const clientName = (sep >= 0 ? rest.slice(sep + 1) : rest).trim();
+
+    try {
+      const { rows: clientRows } = await q(`SELECT id FROM "Client" WHERE "clientName" = $1 LIMIT 1`, [clientName]);
+      await generateReportDraft(reportType, clientName, clientRows[0]?.id || null);
+    } catch (e) {
+      log("report draft failed:", job.id, e.message);
+    }
+    await setStore(cursorKey, { lastHandledNextRunAt: dueIso });
+  }
+}
+
 /* ─────────────── PUSH: run website requests via Hermes ─────────────── */
 async function runRequest(r) {
   await q(`UPDATE "AgentRequest" SET status='running', "startedAt"=now(), "updatedAt"=now() WHERE id=$1`, [r.id]);
   await emit("run", `Started: ${r.title}`, { level: "info", meta: { requestId: r.id, kind: r.kind } });
   try {
     let result = "";
+    let usage = null;
     if (r.kind === "oneshot" || r.kind === "chat") {
-      result = (await hermes(["-z", r.prompt || r.title], { timeout: RUN_TIMEOUT_MS })).trim();
+      const out = await hermesOneshot(r.prompt || r.title);
+      result = out.stdout.trim();
+      usage = out.usage;
     } else if (r.kind === "kanban") {
       result = (await hermes(["kanban", "--board", BOARD, "create", "--json", r.title], { timeout: 20000 })).trim();
     } else if (r.kind.startsWith("cron.")) {
       const op = r.kind.split(".")[1];
       const a = JSON.parse(r.prompt || "{}");
+      const isReportMarker = op === "create" && String(a.name || "").startsWith(REPORT_NAME_PREFIX);
       const argv =
-        op === "create" ? ["cron", "create", a.schedule, a.prompt || a.name].filter(Boolean)
+        isReportMarker ? ["cron", "create", a.schedule, "--name", a.name, "--no-agent", "--script", REPORT_MARKER_SCRIPT]
+        : op === "create" ? ["cron", "create", a.schedule, a.prompt || a.name].filter(Boolean)
         : op === "run"    ? ["cron", "run", a.id || a.name]
         : op === "pause"  ? ["cron", "pause", a.id || a.name]
         : op === "resume" ? ["cron", "resume", a.id || a.name]
@@ -407,11 +505,27 @@ async function runRequest(r) {
       await generateBriefing();
       lastBriefDate = new Date().toISOString().slice(0, 10);
       result = "brief updated";
+    } else if (r.kind === "report.review") {
+      // Drafted by maybeGenerateReports() with result already populated at
+      // insert time; approval just marks it done — no further execution.
+      result = r.result || "";
     } else {
       throw new Error(`unknown kind ${r.kind}`);
     }
-    await q(`UPDATE "AgentRequest" SET status='done', result=$2, "finishedAt"=now(), "updatedAt"=now() WHERE id=$1`,
-      [r.id, result.slice(0, 8000)]);
+
+    const cost = usage && Number.isFinite(usage.estimated_cost_usd) && usage.estimated_cost_usd >= 0
+      ? usage.estimated_cost_usd : null;
+    // COALESCE with the existing column so kinds that don't produce fresh usage
+    // here (e.g. report.review, whose usage was already stored at draft time by
+    // maybeGenerateReports()) don't get their cost/token fields clobbered to NULL.
+    await q(
+      `UPDATE "AgentRequest" SET status='done', result=$2, "finishedAt"=now(), "updatedAt"=now(),
+         "costUsd"=COALESCE($3,"costUsd"), "inputTokens"=COALESCE($4,"inputTokens"),
+         "outputTokens"=COALESCE($5,"outputTokens"), model=COALESCE($6,model), provider=COALESCE($7,provider)
+       WHERE id=$1`,
+      [r.id, result.slice(0, 8000), cost, usage?.input_tokens ?? null, usage?.output_tokens ?? null,
+       usage?.model ?? null, usage?.provider ?? null]
+    );
     await emit("run", `Done: ${r.title}`, { level: "up", detail: result.slice(0, 400), meta: { requestId: r.id } });
   } catch (e) {
     const msg = (e.stderr || e.message || "error").toString().split("\n")[0].slice(0, 600);
@@ -453,6 +567,7 @@ async function mirrorTick() {
   try { await mirrorCost(); } catch (e) { log("mirrorCost err", e.message); }
   try { await mirrorActivity(); } catch (e) { log("mirrorActivity err", e.message); }
   try { await maybeDailyBrief(); } catch (e) { log("maybeDailyBrief err", e.message); }
+  try { await maybeGenerateReports(); } catch (e) { log("maybeGenerateReports err", e.message); }
 }
 
 async function main() {

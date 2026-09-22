@@ -332,7 +332,7 @@ model SavedTitle {
 
 // ─── Client Pulse Telegram Bot ─────────────────────────────────
 
-model ClientPulseClient {
+model Client {
   id                   String                @id @default(cuid())
   notionPageId         String?               @unique
   clientName           String
@@ -348,6 +348,10 @@ model ClientPulseClient {
   chats                ClientPulseChat[]
   analyses             ClientPulseAnalysis[]
   alerts               ClientPulseAlert[]
+  agentRequests        AgentRequest[]
+  hermesTasks          HermesTask[]
+  invoices             Invoice[]
+  recurringServices    RecurringService[]
 
   @@index([status])
   @@index([clientName])
@@ -364,7 +368,7 @@ model ClientPulseChat {
   lastSeenAt      DateTime?
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
-  linkedClient    ClientPulseClient?   @relation(fields: [linkedClientId], references: [id], onDelete: SetNull)
+  linkedClient    Client?              @relation(fields: [linkedClientId], references: [id], onDelete: SetNull)
   messages        ClientPulseMessage[]
   alerts          ClientPulseAlert[]
 
@@ -414,7 +418,7 @@ model ClientPulseAnalysis {
   llmSummary          String?           @db.Text
   analysisSource      String            @default("fallback")
   analyzedAt          DateTime          @default(now())
-  client              ClientPulseClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client              Client            @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@index([clientId, analyzedAt])
   @@index([category])
@@ -434,7 +438,7 @@ model ClientPulseAlert {
   sentAt            DateTime?
   acknowledgedAt    DateTime?
   createdAt         DateTime           @default(now())
-  client            ClientPulseClient? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  client            Client?            @relation(fields: [clientId], references: [id], onDelete: SetNull)
   chat              ClientPulseChat?   @relation(fields: [chatId], references: [id], onDelete: SetNull)
 
   @@index([clientId, createdAt])
@@ -451,7 +455,7 @@ model ClientPulseAlert {
 model AgentRequest {
   id            String    @id @default(cuid())
   origin        String    @default("web")     // "web" | "hermes"
-  kind          String    @default("oneshot") // "oneshot" | "kanban" | "chat"
+  kind          String    @default("oneshot") // "oneshot" | "kanban" | "chat" | "report.review"
   title         String
   prompt        String?
   sideEffecting Boolean   @default(false)
@@ -462,6 +466,14 @@ model AgentRequest {
   retryCount    Int       @default(0)
   maxRetries    Int       @default(3)
   nextRetryAt   DateTime?
+  clientId      String?
+  client        Client?   @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  role          String?   // matches AgentProfile.role, set at dispatch time
+  costUsd       Float?    // only populated when the Hermes usage-file cost is verified >= 0
+  inputTokens   Int?
+  outputTokens  Int?
+  model         String?
+  provider      String?
   decidedAt     DateTime?
   startedAt     DateTime?
   finishedAt    DateTime?
@@ -470,6 +482,8 @@ model AgentRequest {
 
   @@index([status])
   @@index([createdAt])
+  @@index([clientId])
+  @@index([role])
 }
 
 model AgentEvent {
@@ -492,8 +506,14 @@ model HermesCronJob {
   name           String
   schedule       String                          // cron expression
   active         Boolean   @default(true)
-  nextRunAt      DateTime?
-  lastRunAt      DateTime?
+  // @db.Timestamptz — plain `timestamp` silently stores the bridge's JS Date
+  // params using the server's LOCAL wall-clock time (Postgres/node-pg gotcha),
+  // and the server runs CEST (UTC+2), not UTC; verified live this caused
+  // nextRunAt to read ~2h ahead of true UTC, breaking maybeGenerateReports()'s
+  // "is this job due" check. timestamptz stores the correct absolute instant
+  // regardless of session/OS timezone.
+  nextRunAt      DateTime? @db.Timestamptz
+  lastRunAt      DateTime? @db.Timestamptz
   lastRunStatus  String?
   deliverTargets String?
   skills         String[]
@@ -523,11 +543,15 @@ model HermesTask {
   status    String   @default("todo")
   priority  Int?
   result    String?
+  clientId  String?                        // dashboard-owned; never touched by the bridge's mirror
+  client    Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  type      String?                        // dashboard-owned; "content" | "ads" | "seo" | "web" | "creative" | null
   updatedAt DateTime @default(now())
   syncedAt  DateTime @updatedAt
 
   @@index([board])
   @@index([status])
+  @@index([clientId])
 }
 
 // ─── Hermes Memory Wiki (warm tier — git-tracked markdown, mirrored) ─────
@@ -549,4 +573,64 @@ model HermesMemory {
 
   @@index([type])
   @@index([status])
+}
+
+// ─── Agent registry (dashboard-side classification over the real bus — ─────
+// Hermes has no native per-role identity today; roles are tagged on
+// AgentRequest at dispatch time and this table just seeds the known set.
+model AgentProfile {
+  id        String   @id @default(cuid())
+  name      String                      // display identity, e.g. "Researcher"
+  role      String                      // "researcher" | "writer" | "campaign-optimizer" | "qa" | "reporter" | "general"
+  emoji     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([role])
+  @@index([active])
+}
+
+// ─── Finance (thin at MVP — populated manually, no billing API yet) ────────
+model RecurringService {
+  id        String    @id @default(cuid())
+  clientId  String
+  client    Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  name      String
+  amount    Float
+  currency  String    @default("USD")
+  cadence   String    @default("monthly") // "monthly" | "quarterly" | "annual" | "project"
+  status    String    @default("active")  // "active" | "paused" | "ended"
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  notes     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  invoices  Invoice[]
+
+  @@index([clientId])
+  @@index([status])
+}
+
+model Invoice {
+  id                 String            @id @default(cuid())
+  clientId           String
+  client             Client            @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  recurringServiceId String?
+  recurringService   RecurringService? @relation(fields: [recurringServiceId], references: [id], onDelete: SetNull)
+  number             String            @unique
+  description        String?
+  amount             Float
+  currency           String            @default("USD")
+  status             String            @default("draft") // "draft" | "sent" | "paid" | "overdue" | "void"
+  issuedAt           DateTime?
+  dueAt              DateTime?
+  paidAt             DateTime?
+  notes              String?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  @@index([clientId])
+  @@index([status])
+  @@index([dueAt])
 }
